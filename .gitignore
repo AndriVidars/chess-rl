@@ -8,3 +8,6 @@ __pycache__/
 .Python
 .DS_Store
 .env*
+
+# s
+stockfish.exe
