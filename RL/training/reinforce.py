@@ -32,8 +32,6 @@ def reinforce_train(
     # This is complex in a vector loop. 
     # Simpler V1: Just run batch simulation. Training logic needs memory buffer.
     
-    active_games_indices = list(range(batch_size))
-    
     for _ in tqdm(range(num_moves), desc="Self-Play Steps"):
         
         # 1. Filter only active games (redundant with simple restart logic, but good practice)
@@ -45,16 +43,12 @@ def reinforce_train(
         
         # 3. Apply moves & Check termination
         for i, move in enumerate(moves):
-            board = games[i]
-            if move is None: 
-                # Should not happen if we reset immediately, but safety check
-                games[i] = chess.Board()
-                continue
-                
+            board = games[i]    
             board.push(move)
             
             if board.is_game_over():
                 result = board.result() # '1-0', '0-1', '1/2-1/2'
+                
                 # TODO: Parse result, assign reward, store trajectory, optimize
                 
                 games[i] = chess.Board() # Reset immediately

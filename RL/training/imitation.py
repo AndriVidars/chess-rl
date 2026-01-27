@@ -1,89 +1,84 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset, random_split
 import sys
 import os
-import random
-import concurrent.futures
-from stockfish import Stockfish
-import chess
-import torch
-import time
+from tqdm import tqdm
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from encode_board import encode_board_state
+from chess_net import ChessNet
 
-
-def worker_generate_batch(stockfish_path, batch_size, elo=1600, time_per_move=10):
-    stockfish = Stockfish(path=stockfish_path)
-    stockfish.set_elo_rating(elo)
-
-    data = []
-    
-    for _ in range(batch_size):
-        board = chess.Board()
-        
-        while not board.is_game_over() and board.fullmove_number < 120:
-            fen = board.fen()
-            stockfish.set_fen_position(fen)
-            
-            best_move_uci = stockfish.get_best_move_time(time_per_move)
-            if not best_move_uci:
-                break
-                
-            move = chess.Move.from_uci(best_move_uci)
-            
-            # Encode state and move
-            # Encoded state: 65-dim tensor
-            state_tensor = encode_board_state(board)
-            
-            # Target: index of the move (from_sq * 64 + to_sq)
-            move_idx = move.from_square * 64 + move.to_square
-            
-            data.append((state_tensor, move_idx))
-            
-            # Make the move on the board to proceed
-            board.push(move)
-                
-    return data
 
 class ImitationTrainer:
-    def __init__(self, stockfish_path: str, elo: int = 1600, batch_size: int = 32, num_games: int = 100_000):
-        self.stockfish_path = stockfish_path
-        self.elo = elo
-        self.batch_size = batch_size
-        self.num_games = num_games
-        self.data = []
+    def __init__(self, net: ChessNet, optimizer, dataset: Dataset, init_weights=None, batch_size=64):
+        self.net = net
+        self.optimizer = optimizer
+        self.criterion = nn.CrossEntropyLoss()
+        
+        if init_weights:
+            self.net.load_state_dict(init_weights)
+        
+        train_size = int(len(dataset) * 0.8)
+        eval_size = len(dataset) - train_size
+        train_ds, eval_ds = random_split(dataset, [train_size, eval_size])
+        
+        self.train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        self.eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False)
 
-    def collect_moves_data(self):
-        num_workers = os.cpu_count() or 1
-        games_per_worker = self.num_games // num_workers
-        
-        print(f"Starting generation of {self.num_games} games across {num_workers} workers...")
-        
-        start_time = time.time()
-        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [
-                executor.submit(
-                    worker_generate_batch, 
-                    self.stockfish_path, 
-                    games_per_worker, 
-                    self.elo
-                ) 
-                for _ in range(num_workers)
-            ]
+    def train(self, num_epochs=10):
+        self.net.train()
+        for epoch in range(num_epochs):
+            total_loss = 0
+            num_batches = 0
             
-            results = []
-            for future in concurrent.futures.as_completed(futures):
-                batch_data = future.result()
-                results.extend(batch_data)
-                print(f"Worker finished. Collected {len(batch_data)} samples so far...")
+            with tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
+                for batch in pbar:
+                    states, true_moves = batch
+    
+                    self.optimizer.zero_grad()
+                    logits = self.net(states)
+                    loss = self.criterion(logits, true_moves)
+                    
+                    loss.backward()
+                    self.optimizer.step()
+                    
+                    total_loss += loss.item()
+                    num_batches += 1
+                    
+                    if num_batches % 10 == 0:
+                        pbar.set_postfix({' loss': total_loss / num_batches})
+
+            self.evaluate()
+
+    def evaluate(self):
+        self.net.eval()
+        total_loss = 0
         
-        self.data = results
-        total_time = time.time()     - start_time
-        print(f"Total samples collected: {len(self.data)}")
-        print(f"Total time taken: {total_time:.2f} seconds, {total_time / self.num_games:.2f} seconds per game")
+        with torch.no_grad():
+            for batch in self.eval_loader:
+                states, true_moves = batch
+                logits = self.net(states)
+                loss = self.criterion(logits, true_moves)
+                total_loss += loss.item()
+                
+        avg_loss = total_loss / len(self.eval_loader)
+        print(f"Validation Loss: {avg_loss:.4f}")
+        self.net.train()
 
 if __name__ == "__main__":
-    stockfish_path = os.path.join(os.path.dirname(__file__), "../../stockfish.exe")
+    dataset_path = os.path.join(os.path.dirname(__file__), "imitation_data_1024_1600.pt") # TODO use larger?
+    dataset = torch.load(dataset_path, weights_only=False)
     
-    # Example usage
-    trainer = ImitationTrainer(stockfish_path, num_games=1024) # Small number for testing
-    trainer.collect_moves()
+    net = ChessNet()
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
+    
+    trainer = ImitationTrainer(net, optimizer, dataset, batch_size=64)
+
+    num_epochs = 4
+    trainer.train(num_epochs=num_epochs)
+    
+    save_path = os.path.join(os.path.dirname(__file__), f"chess_net_imitation_{num_epochs}.pth")
+    torch.save(net.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
+
+
