@@ -11,13 +11,17 @@ class ChessNet(nn.Module):
         self.embedding = nn.Embedding(num_embeddings=13, embedding_dim=embedding_dim)
         
         # Convolutions
-        convs = []
+        self.convolutions = nn.ModuleList()
         for i in range(num_convs):
             # Input starts at embedding_dim, then increases
             in_channels = (i + 1) * embedding_dim
             out_channels = (i + 2) * embedding_dim
-            convs.append(nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1))
-        self.convolutions = nn.ModuleList(convs)
+            
+            self.convolutions.append(nn.Sequential(
+                nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU()
+            ))
         
         # Fully Connected MLP
         # Calculate flattened size from last conv layer
@@ -26,12 +30,22 @@ class ChessNet(nn.Module):
         conv_output_size = ((num_convs + 1) * embedding_dim) * 8 * 8
         
         linear_dim = 4096 # 64*64 moves
-        mlp = []
+        self.mlp = nn.ModuleList()
+        
         for i in range(num_linear):
             in_features = (conv_output_size + 1) if i == 0 else linear_dim # +1 for turn info
             out_features = linear_dim
-            mlp.append(nn.Linear(in_features=in_features, out_features=out_features))
-        self.mlp = nn.ModuleList(mlp)
+            
+            if i < num_linear - 1:
+                # Hidden layers get BN and ReLU
+                self.mlp.append(nn.Sequential(
+                    nn.Linear(in_features=in_features, out_features=out_features),
+                    nn.BatchNorm1d(out_features),
+                    nn.ReLU()
+                ))
+            else:
+                # Last layer is just Linear (Logits)
+                self.mlp.append(nn.Linear(in_features=in_features, out_features=out_features))
         
 
     def forward(self, x):
@@ -47,8 +61,8 @@ class ChessNet(nn.Module):
         x = x.view(-1, 8, 8, self.embedding_dim).permute(0, 3, 1, 2)
         
         # Apply Convolutions
-        for conv in self.convolutions:
-            x = F.relu(conv(x))
+        for block in self.convolutions:
+            x = block(x)
         
         x = x.flatten(start_dim=1)
         
@@ -56,9 +70,7 @@ class ChessNet(nn.Module):
         x = torch.cat([x, turn], dim=1)
         
         # Apply MLP
-        for i, layer in enumerate(self.mlp):
-            x = layer(x)
-            if i < len(self.mlp) - 1:
-                x = F.relu(x)
+        for block in self.mlp:
+            x = block(x)
         
         return x
