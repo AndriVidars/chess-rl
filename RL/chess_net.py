@@ -24,9 +24,6 @@ class ChessNet(nn.Module):
             ))
         
         # Fully Connected MLP
-        # Calculate flattened size from last conv layer
-        # Last conv out_channels = (num_convs + 1) * embedding_dim
-        # Spatial dimensions stay 8x8
         conv_output_size = ((num_convs + 1) * embedding_dim) * 8 * 8
         
         linear_dim = 4096 # 64*64 moves
@@ -37,14 +34,13 @@ class ChessNet(nn.Module):
             out_features = linear_dim
             
             if i < num_linear - 1:
-                # Hidden layers get BN and ReLU
                 self.mlp.append(nn.Sequential(
                     nn.Linear(in_features=in_features, out_features=out_features),
                     nn.BatchNorm1d(out_features),
-                    nn.ReLU()
+                    nn.ReLU(),
+                    nn.Dropout(0.1)
                 ))
             else:
-                # Last layer is just Linear (Logits)
                 self.mlp.append(nn.Linear(in_features=in_features, out_features=out_features))
         
 
@@ -60,17 +56,17 @@ class ChessNet(nn.Module):
         # Permute to (Batch, Channel, Height, Width)
         x = x.view(-1, 8, 8, self.embedding_dim).permute(0, 3, 1, 2)
         
-        # Apply Convolutions
-        for block in self.convolutions:
-            x = block(x)
+        # conv
+        for conv in self.convolutions:
+            x = conv(x)
         
         x = x.flatten(start_dim=1)
         
         # Concatenate Turn info
         x = torch.cat([x, turn], dim=1)
-        
-        # Apply MLP
-        for block in self.mlp:
-            x = block(x)
+
+        # mlp
+        for linear in self.mlp:
+            x = linear(x)
         
         return x
