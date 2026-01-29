@@ -21,7 +21,7 @@ class EvalHandler:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
         self.model_handler = ChessNetHandler(self.boards, ChessNet(), device)
-        self.model_handler.model.load_state_dict(torch.load(weights_path))
+        self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
         self.model_handler.model.eval()
 
         self.games = [self.assign_agents(board_idx) for board_idx in range(self.batch_size)]
@@ -36,7 +36,10 @@ class EvalHandler:
 
 
     def eval(self): 
-        results = []
+        wins = 0
+        ties = 0
+        num_moves_total = 0
+
         games_completed = 0
         games_started = self.batch_size
         while games_completed < self.num_games:            
@@ -45,8 +48,12 @@ class EvalHandler:
                     continue
                 game.make_turn()
                 if game.board.is_game_over():
-                    results.append(game.get_result())
-                    print(f"Game completed in {game.board.fullmove_number} moves")
+                    winner = game.get_result()
+                    if winner == type(self.model_handler.model):
+                        wins += 1
+                    elif winner is None:
+                        ties += 1
+                    num_moves_total += game.board.fullmove_number
                     games_completed += 1
                     self.boards[i].reset()
                     if games_started < self.num_games:
@@ -58,20 +65,28 @@ class EvalHandler:
             self.model_handler.cur_moves = None
             self.model_handler.cur_log_probs = None
         
-        return results
+        win_rate = wins / self.num_games
+        tie_rate = ties / self.num_games
+        loss_rate = 1 - win_rate - tie_rate
+        avg_moves = num_moves_total / self.num_games
+        return win_rate, tie_rate, loss_rate, avg_moves
 
 def main():
     stockfish_path = os.path.join(os.path.dirname(__file__), "..", "..", "stockfish.exe")
     weights_path = os.path.join(os.path.dirname(__file__), "..", "training", "imitation_training_best_eval.pth")
     stockfish_elo = 1350
-    stockfish_time_per_move = 10
-    num_games = 128
-    batch_size = 32
+    stockfish_time_per_move = 5
+    num_games = 64
+    batch_size = 16
     
     handler = EvalHandler(num_games, batch_size, weights_path, stockfish_path, stockfish_elo, stockfish_time_per_move)
     results = handler.eval()
     
-    print(results)
+    print(f"Win rate: {results[0]}")
+    print(f"Tie rate: {results[1]}")
+    print(f"Loss rate: {results[2]}")
+    print(f"Average moves: {results[3]}")
+    return results
     
 
 if __name__ == "__main__":

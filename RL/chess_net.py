@@ -49,6 +49,17 @@ class ChessNet(nn.Module):
             else:
                 self.mlp.append(nn.Linear(in_features=in_features, out_features=out_features))
         
+        # Value Head
+        # Same input features as MLP (conv_output_size + 1)
+        # Using a smaller MLP for value
+        self.value_head = nn.Sequential(
+            nn.Linear(in_features=(conv_output_size + 1), out_features=256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(in_features=256, out_features=1),
+            nn.Tanh() # Output -1 to 1
+        )
+
 
     def forward(self, x):
         # x shape: (Batch, 65) -> [Turn, 64 squares]
@@ -70,25 +81,32 @@ class ChessNet(nn.Module):
         
         # Concatenate Turn info
         x = torch.cat([x, turn], dim=1)
-
-        # mlp
-        for linear in self.mlp:
-            x = linear(x)
         
-        return x
+        # Policy Head
+        x_policy = x
+        for linear in self.mlp:
+            x_policy = linear(x_policy)
+            
+        # Value Head
+        value = self.value_head(x)
 
-def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.device, num_workers: int = os.cpu_count()):
+        return x_policy, value
+
+def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.device, num_workers: int = 1):
     model.eval()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_workers)
-    
-    future_states = executor.map(encode_board_state, boards)
-    future_masks = executor.map(encode_legal_moves, boards)
-    
-    board_states = torch.stack(list(future_states)).to(device) # (Batch, 65)
-    legal_moves_masks = torch.stack(list(future_masks)).to(device) # (Batch, 4096)
+    if num_workers > 1:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_workers)
+        future_states = executor.map(encode_board_state, boards)
+        future_masks = executor.map(encode_legal_moves, boards)
+        board_states = torch.stack(list(future_states)).to(device) # (Batch, 65)
+        legal_moves_masks = torch.stack(list(future_masks)).to(device) # (Batch, 4096)
+        executor.shutdown()
+    else:
+        board_states = torch.stack([encode_board_state(b) for b in boards]).to(device)
+        legal_moves_masks = torch.stack([encode_legal_moves(b) for b in boards]).to(device)
 
     with torch.no_grad():
-        logits = model(board_states) # (Batch, 4096)
+        logits, values = model(board_states) # (Batch, 4096), (Batch, 1)
         
         # Mask illegal moves
         logits[legal_moves_masks == 0] = float('-inf')
@@ -97,11 +115,10 @@ def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.devic
         probs = torch.softmax(logits, dim=1)
         dist = torch.distributions.Categorical(probs)
         action_indices = dist.sample() # (Batch,)
-        log_probs = dist.log_prob(action_indices) # (Batch,)
         
         moves = [decode_move(idx.item()) for idx in action_indices]
-        return moves, log_probs
+        return moves, board_states, action_indices, values
 
 def sample_move(model: ChessNet, board: chess.Board, device: torch.device):
-    moves, log_probs = sample_moves(model, [board], device)
-    return moves[0], log_probs[0]
+    moves, board_states, action_indices, values = sample_moves(model, [board], device)
+    return moves[0], board_states[0], action_indices[0], values[0]

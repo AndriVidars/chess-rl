@@ -22,7 +22,7 @@ class ImitationTrainer:
         self.best_model_state = None
         
         if init_weights:
-            self.net.load_state_dict(init_weights)
+            self.net.load_state_dict(init_weights, strict=False)
         
         train_size = int(len(dataset) * 0.8)
         eval_size = len(dataset) - train_size
@@ -43,7 +43,7 @@ class ImitationTrainer:
                     states, true_moves = states.to(self.device), true_moves.to(self.device)
     
                     self.optimizer.zero_grad()
-                    logits = self.net(states)
+                    logits, _ = self.net(states)
                     loss = self.criterion(logits, true_moves)
                     
                     loss.backward()
@@ -69,7 +69,7 @@ class ImitationTrainer:
             for batch in self.eval_loader:
                 states, true_moves = batch
                 states, true_moves = states.to(self.device), true_moves.to(self.device)
-                logits = self.net(states)
+                logits, _ = self.net(states)
                 loss = self.criterion(logits, true_moves)
                 total_loss += loss.item()
                 
