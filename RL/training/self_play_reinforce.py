@@ -46,7 +46,7 @@ class ReinforceTrainer:
         self.epochs = epochs # number of epochs to run for each update
         self.completed_rollouts = []
         self.checkpoint_interval = checkpoint_interval
-        self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..\checkpoints")
+        self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..", "checkpoints")
 
         self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-4)
     
@@ -158,7 +158,7 @@ class ReinforceTrainer:
             
 def main():
     trainer = ReinforceTrainer(
-        weights_path = os.path.join(os.path.dirname(__file__), "..\checkpoints\pre_trained_4096_1600.pth"),
+        weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth"),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         num_games=1024, # TODO increase
         checkpoint_interval=128, # TODO increase

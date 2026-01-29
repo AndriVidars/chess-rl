@@ -73,8 +73,8 @@ class EvalHandler:
         return win_rate, tie_rate, loss_rate, avg_moves
 
 def main():
-    stockfish_path = os.path.join(os.path.dirname(__file__), "..\stockfish\stockfish.exe")
-    weights_path = os.path.join(os.path.dirname(__file__), "..\checkpoints\pre_trained_4096_1600.pth")
+    stockfish_path = os.path.join(os.path.dirname(__file__), "..", "stockfish", "stockfish.exe")
+    weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth")
     
     stockfish_elo = 1350
     stockfish_time_per_move = 5

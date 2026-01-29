@@ -79,12 +79,12 @@ def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int
     
     # Save to file
     filename = f"imitation_data_{num_games}_{elo}.pt"
-    save_path = os.path.join(os.path.dirname(__file__), f"..\data\{filename}")
+    save_path = os.path.join(os.path.dirname(__file__), "..", "data", filename)
     torch.save(dataset, save_path)
     print(f"Dataset saved to {save_path}")
     
     return save_path
 
 if __name__ == "__main__":
-    stockfish_path = os.path.join(os.path.dirname(__file__), "..\stockfish\stockfish.exe")
+    stockfish_path = os.path.join(os.path.dirname(__file__), "..", "stockfish", "stockfish.exe")
     generate_imitation_data(stockfish_path, num_games=4096, elo=1600)

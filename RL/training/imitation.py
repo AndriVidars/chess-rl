@@ -119,7 +119,7 @@ def main():
     num_epochs = 5 # 5
     
     
-    dataset_path = os.path.join(os.path.dirname(__file__), f"..\data\imitation_data_{num_imitation_games}_{elo}.pt")
+    dataset_path = os.path.join(os.path.dirname(__file__), "..", "data", f"imitation_data_{num_imitation_games}_{elo}.pt")
     dataset = torch.load(dataset_path, weights_only=False)
     
     net = ChessNet()
@@ -128,10 +128,10 @@ def main():
 
     trainer.train()
     
-    plot_save_path = os.path.join(os.path.dirname(__file__), f"..\plots\imitation_{num_imitation_games}_loss_curve_{num_epochs}.png")
+    plot_save_path = os.path.join(os.path.dirname(__file__), "..", "plots", f"imitation_{num_imitation_games}_loss_curve_{num_epochs}.png")
     trainer.plot_losses(save_path=plot_save_path)
 
-    save_path = os.path.join(os.path.dirname(__file__), f"..\checkpoints\pre_trained_{num_imitation_games}_{elo}.pth")
+    save_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{num_imitation_games}_{elo}.pth")
     torch.save(trainer.best_model_state, save_path)
 
 
