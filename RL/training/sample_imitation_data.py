@@ -7,8 +7,7 @@ import chess
 import torch
 import time
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from encode_board import encode_board_state
+from RL.encode_board import encode_board_state
 
 
 def worker_generate_batch(stockfish_path, batch_size, elo=1600, time_per_move=10):

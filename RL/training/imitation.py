@@ -6,8 +6,7 @@ import os
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from chess_net import ChessNet
+from RL.chess_net import ChessNet
 
 
 class ImitationTrainer:

@@ -1,6 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import chess
+from RL.encode_board import encode_board_state, encode_legal_moves, decode_move
+from typing import List
+import os
+import concurrent.futures
+
 
 class ChessNet(nn.Module):
     def __init__(self, embedding_dim=32, num_convs=3, num_linear=3):
@@ -70,3 +76,32 @@ class ChessNet(nn.Module):
             x = linear(x)
         
         return x
+
+def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.device, num_workers: int = os.cpu_count()):
+    model.eval()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_workers)
+    
+    future_states = executor.map(encode_board_state, boards)
+    future_masks = executor.map(encode_legal_moves, boards)
+    
+    board_states = torch.stack(list(future_states)).to(device) # (Batch, 65)
+    legal_moves_masks = torch.stack(list(future_masks)).to(device) # (Batch, 4096)
+
+    with torch.no_grad():
+        logits = model(board_states) # (Batch, 4096)
+        
+        # Mask illegal moves
+        logits[legal_moves_masks == 0] = float('-inf')
+        
+        # Sample action
+        probs = torch.softmax(logits, dim=1)
+        dist = torch.distributions.Categorical(probs)
+        action_indices = dist.sample() # (Batch,)
+        log_probs = dist.log_prob(action_indices) # (Batch,)
+        
+        moves = [decode_move(idx.item()) for idx in action_indices]
+        return moves, log_probs
+
+def sample_move(model: ChessNet, board: chess.Board, device: torch.device):
+    moves, log_probs = sample_moves(model, [board], device)
+    return moves[0], log_probs[0]

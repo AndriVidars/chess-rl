@@ -1,4 +1,4 @@
-from chess_net_agent import ChessNetAgent
+from RL.game_environment.chess_net_agent import ChessNetAgent
 import chess
 import torch
 from tqdm import tqdm
@@ -39,7 +39,7 @@ def reinforce_train(
         
         # 2. Get moves for ALL games (Agent plays effectively for side to move)
         # Note: sample_moves returns valid moves for whoever is to move.
-        moves = agent_wrapper.agent.sample_moves(games)
+        moves, log_probs = agent_wrapper.agent.sample_moves(games)
         
         # 3. Apply moves & Check termination
         for i, move in enumerate(moves):
