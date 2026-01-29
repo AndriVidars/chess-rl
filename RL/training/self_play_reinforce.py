@@ -10,10 +10,12 @@ from RL.game_environment.chess_net_agent import ChessNetAgent, ChessNetHandler, 
 
 
 class ReinforceTrainer:
+    # TODO: change and tune defaults
     def __init__(self,
                  weights_path: str,
                  device: torch.device,
                  num_games: int,
+                 checkpoint_interval: int,
                  game_batch_size: int = 8,
                  minibatch_size: int = 32, 
                  update_rollout_size: int = 128,  
@@ -29,6 +31,7 @@ class ReinforceTrainer:
         self.model_handler = ChessNetHandler(self.boards, ChessNet(), device, collect_trajectories=True, trajectories=self.active_rollouts)
         self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
         #self.model_handler.model.eval()?
+        
         self.games = [
             Game(
                 self.boards[i], 
@@ -42,11 +45,14 @@ class ReinforceTrainer:
         self.update_rollout_size = update_rollout_size # number complete game rollouts to collect before updating with gradient on moves
         self.epochs = epochs # number of epochs to run for each update
         self.completed_rollouts = []
+        self.checkpoint_interval = checkpoint_interval
+        self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..\checkpoints")
 
         self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-4)
     
     def train(self):
         num_games_completed = 0
+        last_checkpoint = 0
         
         while num_games_completed < self.num_games:
             for i, game in enumerate(self.games):
@@ -56,7 +62,6 @@ class ReinforceTrainer:
                 
                 if game.board.is_game_over():
                     num_games_completed += 1
-                    #print(f"Game {num_games_completed}/{self.num_games} completed, Result: {game.board.result()}")
                     results = game.get_result()
                     if results == chess.WHITE:
                         self.active_rollouts[i][chess.WHITE].reward = 1
@@ -112,7 +117,7 @@ class ReinforceTrainer:
                 self.model_handler.model.train()
                 for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs"):
                     random.shuffle(indices)
-                    for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches"):
+                    for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=False):
                         end_idx = min(start_idx + self.minibatch_size, dataset_size)
                         batch_indices = indices[start_idx:end_idx]
                         
@@ -140,16 +145,22 @@ class ReinforceTrainer:
                         loss.backward()
                         self.optimizer.step()
                 
+                if num_games_completed - last_checkpoint >= self.checkpoint_interval:
+                    print(f"Saving checkpoint at {num_games_completed} games completed")
+                    torch.save(self.model_handler.model.state_dict(), os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth"))
+                    last_checkpoint = num_games_completed
+                
                 self.completed_rollouts = []            
 
             
 def main():
     trainer = ReinforceTrainer(
-        weights_path = os.path.join(os.path.dirname(__file__), "imitation_training_best_eval.pth"),
+        weights_path = os.path.join(os.path.dirname(__file__), "..\checkpoints\pre_trained_4096_1600.pth"),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        num_games=1024,
-        game_batch_size=8,
-        update_rollout_size=16,
+        num_games=1024, # TODO increase
+        checkpoint_interval=128, # TODO increase
+        game_batch_size=8, # TODO increase
+        update_rollout_size=16, # TODO increase
     )
     trainer.train()
 

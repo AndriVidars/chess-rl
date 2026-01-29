@@ -22,7 +22,7 @@ class ChessNetHandler:
                  collect_trajectories: bool = False,
                  trajectories: List[Dict[chess.Color, Trajectory]] = None):
         
-        self.model = model
+        self.model = model.to(device)
         self.device = device
         self.boards = boards
         self.num_boards = len(boards)

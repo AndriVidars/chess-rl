@@ -20,6 +20,7 @@ class EvalHandler:
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
+        
         self.model_handler = ChessNetHandler(self.boards, ChessNet(), device)
         self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
         self.model_handler.model.eval()
@@ -72,12 +73,13 @@ class EvalHandler:
         return win_rate, tie_rate, loss_rate, avg_moves
 
 def main():
-    stockfish_path = os.path.join(os.path.dirname(__file__), "..", "..", "stockfish.exe")
-    weights_path = os.path.join(os.path.dirname(__file__), "..", "training", "imitation_training_best_eval.pth")
+    stockfish_path = os.path.join(os.path.dirname(__file__), "..\stockfish\stockfish.exe")
+    weights_path = os.path.join(os.path.dirname(__file__), "..\checkpoints\pre_trained_4096_1600.pth")
+    
     stockfish_elo = 1350
     stockfish_time_per_move = 5
-    num_games = 64
-    batch_size = 16
+    num_games = 1024 # 1024
+    batch_size = 64 # 64
     
     handler = EvalHandler(num_games, batch_size, weights_path, stockfish_path, stockfish_elo, stockfish_time_per_move)
     results = handler.eval()

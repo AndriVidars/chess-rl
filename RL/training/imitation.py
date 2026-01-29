@@ -5,12 +5,20 @@ import sys
 import os
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-
 from RL.chess_net import ChessNet
 
 
 class ImitationTrainer:
-    def __init__(self, net: ChessNet, optimizer, dataset: Dataset, device: torch.device, init_weights=None, batch_size=64):
+    def __init__(self, 
+                net: ChessNet, 
+                optimizer, 
+                dataset: Dataset, 
+                device: torch.device, 
+                init_weights=None, 
+                batch_size=64,
+                num_epochs=5
+                ):
+        
         self.net = net.to(device)
         self.optimizer = optimizer
         self.criterion = nn.CrossEntropyLoss()
@@ -20,6 +28,9 @@ class ImitationTrainer:
         self.eval_losses = []
         self.best_val_loss = float('inf')
         self.best_model_state = None
+
+        self.batch_size = batch_size
+        self.num_epochs = num_epochs
         
         if init_weights:
             self.net.load_state_dict(init_weights, strict=False)
@@ -28,16 +39,16 @@ class ImitationTrainer:
         eval_size = len(dataset) - train_size
         train_ds, eval_ds = random_split(dataset, [train_size, eval_size])
         
-        self.train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        self.eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False)
+        self.train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+        self.eval_loader = DataLoader(eval_ds, batch_size=self.batch_size, shuffle=False)
 
-    def train(self, num_epochs=10):
+    def train(self):
         self.net.train()
-        for epoch in range(num_epochs):
+        for epoch in range(self.num_epochs):
             total_loss = 0
             num_batches = 0
             
-            with tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
+            with tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.num_epochs}") as pbar:
                 for batch in pbar:
                     states, true_moves = batch
                     states, true_moves = states.to(self.device), true_moves.to(self.device)
@@ -86,10 +97,10 @@ class ImitationTrainer:
 
         self.net.train()
 
-    def plot_losses(self, num_epochs, save_path="loss_plot.png"):
+    def plot_losses(self, save_path):
         plt.figure(figsize=(10, 6))
-        plt.plot(range(1, num_epochs + 1), self.train_losses, label='Training Loss')
-        plt.plot(range(1, num_epochs + 1), self.eval_losses, label='Validation Loss')
+        plt.plot(range(1, self.num_epochs + 1), self.train_losses, label='Training Loss')
+        plt.plot(range(1, self.num_epochs + 1), self.eval_losses, label='Validation Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title('Training and Validation Loss Over Epochs')
@@ -98,24 +109,31 @@ class ImitationTrainer:
         plt.savefig(save_path)
         print(f"Loss plot saved to {save_path}")
 
-
-if __name__ == "__main__":
+def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    dataset_path = os.path.join(os.path.dirname(__file__), "imitation_data_4096_1600.pt")
+    num_imitation_games = 4096
+    elo = 1600
+    batch_size = 64 # 64
+    num_epochs = 5 # 5
+    
+    
+    dataset_path = os.path.join(os.path.dirname(__file__), f"..\data\imitation_data_{num_imitation_games}_{elo}.pt")
     dataset = torch.load(dataset_path, weights_only=False)
     
-    net = ChessNet() # Assuming ChessNet has a default dropout or it's handled internally
+    net = ChessNet()
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-4, weight_decay=1e-4)
-    trainer = ImitationTrainer(net, optimizer, dataset, device, batch_size=64)
+    trainer = ImitationTrainer(net, optimizer, dataset, device, batch_size=batch_size, num_epochs=num_epochs)
 
-    num_epochs = 5
-    trainer.train(num_epochs=num_epochs)
+    trainer.train()
     
-    plot_save_path = os.path.join(os.path.dirname(__file__), "loss_curve.png")
-    trainer.plot_losses(num_epochs=num_epochs, save_path=plot_save_path)
+    plot_save_path = os.path.join(os.path.dirname(__file__), f"..\plots\imitation_{num_imitation_games}_loss_curve_{num_epochs}.png")
+    trainer.plot_losses(save_path=plot_save_path)
 
-
-    save_path = os.path.join(os.path.dirname(__file__), f"chess_net_imitation_best_val.pth")
+    save_path = os.path.join(os.path.dirname(__file__), f"..\checkpoints\pre_trained_{num_imitation_games}_{elo}.pth")
     torch.save(trainer.best_model_state, save_path)
+
+
+if __name__ == "__main__":
+    main()
