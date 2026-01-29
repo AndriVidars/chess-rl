@@ -150,7 +150,10 @@ class ReinforceTrainer:
                     torch.save(self.model_handler.model.state_dict(), os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth"))
                     last_checkpoint = num_games_completed
                 
-                self.completed_rollouts = []            
+                # TODO: periodic eval against stockfish
+
+                self.completed_rollouts = []
+
 
             
 def main():
