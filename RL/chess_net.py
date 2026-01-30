@@ -10,6 +10,7 @@ import concurrent.futures
 
 class ChessNet(nn.Module):
     def __init__(self, embedding_dim=32, num_convs=3, num_linear=3):
+        # TODO: smaller model?
         super(ChessNet, self).__init__()
         self.embedding_dim = embedding_dim
         

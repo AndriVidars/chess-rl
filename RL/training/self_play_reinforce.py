@@ -11,6 +11,8 @@ from RL.game_environment.chess_net_agent import ChessNetAgent, ChessNetHandler, 
 
 class ReinforceTrainer:
     # TODO: change and tune defaults
+    # TODO: add clipping/kl control
+    # TODO: gradient update triggered by number of moves(states), not full game rollouts?
     def __init__(self,
                  weights_path: str,
                  device: torch.device,
@@ -23,6 +25,8 @@ class ReinforceTrainer:
                  ):
         
         self.device = device
+        print(f"\n\nRunning on Device: {self.device}\n\n")
+
         self.num_games = num_games
         self.game_batch_size = game_batch_size # number of games run in parallel when collecting trajectories
         self.boards = [chess.Board() for _ in range(self.game_batch_size)]
@@ -30,7 +34,7 @@ class ReinforceTrainer:
         self.active_rollouts = [{chess.WHITE: Trajectory(), chess.BLACK: Trajectory()} for _ in range(self.game_batch_size)]
         self.model_handler = ChessNetHandler(self.boards, ChessNet(), device, collect_trajectories=True, trajectories=self.active_rollouts)
         self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
-        #self.model_handler.model.eval()?
+        self.model_handler.model.eval()
         
         self.games = [
             Game(
@@ -49,6 +53,9 @@ class ReinforceTrainer:
         self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..", "checkpoints")
 
         self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-4)
+
+        num_params = sum(p.numel() for p in self.model_handler.model.parameters())
+        print(f"Model has {num_params} parameters\n")
     
     def train(self):
         num_games_completed = 0
@@ -80,7 +87,7 @@ class ReinforceTrainer:
                     if num_games_completed < self.num_games:
                         self.games[i] = Game(self.boards[i], ChessNetAgent(self.model_handler, self.boards[i], i), ChessNetAgent(self.model_handler, self.boards[i], i))
                     else:
-                        self.games[i] = None
+                        self.games[i] = None  
 
 
             if len(self.completed_rollouts) >= self.update_rollout_size:
@@ -115,6 +122,9 @@ class ReinforceTrainer:
                 indices = list(range(dataset_size))
                 
                 self.model_handler.model.train()
+
+                # Capture initial parameters to measure update magnitude
+                initial_params = [p.clone().detach() for p in self.model_handler.model.parameters()]
                 for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs"):
                     random.shuffle(indices)
                     for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=False):
@@ -145,6 +155,12 @@ class ReinforceTrainer:
                         loss.backward()
                         self.optimizer.step()
                 
+                # Calculate update magnitude
+                final_params = [p for p in self.model_handler.model.parameters()]
+                update_diff = [p_final - p_init for p_final, p_init in zip(final_params, initial_params)]
+                update_magnitude = torch.norm(torch.stack([torch.norm(diff) for diff in update_diff]))
+                print(f"Update Magnitude (L2 Norm of param change): {update_magnitude.item():.6f}\n")
+
                 if num_games_completed - last_checkpoint >= self.checkpoint_interval:
                     print(f"Saving checkpoint at {num_games_completed} games completed")
                     torch.save(self.model_handler.model.state_dict(), os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth"))
@@ -160,10 +176,12 @@ def main():
     trainer = ReinforceTrainer(
         weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth"),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        num_games=1024, # TODO increase
-        checkpoint_interval=128, # TODO increase
-        game_batch_size=8, # TODO increase
-        update_rollout_size=16, # TODO increase
+        num_games=100_000, # TODO increase
+        checkpoint_interval=10_000,
+        game_batch_size=64,
+        minibatch_size=64,
+        update_rollout_size=128, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories
+        epochs=3 # TUNE
     )
     trainer.train()
 
