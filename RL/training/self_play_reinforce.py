@@ -99,8 +99,7 @@ class ReinforceTrainer:
 
 
             if len(self.completed_rollouts) >= self.update_rollout_size:
-                print(f"Completed {len(self.completed_rollouts)} game rollouts")
-
+                print(f"Running policy update after: {num_games_completed} games completed")
                 # gather rollouts and convert to tensors
                 all_states = []
                 all_actions = []
@@ -114,7 +113,7 @@ class ReinforceTrainer:
                         all_values.extend(traj.values)
                         all_returns.extend([traj.reward] * len(traj.states))
                 
-                print(f"Number of moves in rollout batch: {len(all_states)}")
+                print(f"Number of states (moves) in rollout batch: {len(all_states)}")
 
                 state_tensor = torch.stack(all_states)
                 action_tensor = torch.stack(all_actions)
@@ -132,10 +131,13 @@ class ReinforceTrainer:
                 self.model_handler.model.train()
                 # Capture initial parameters to measure update magnitude
                 initial_params = [p.clone().detach() for p in self.model_handler.model.parameters()]
-                for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs"):
+                for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs", disable=True):
                     random.shuffle(indices)
-                    for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=False):
+                    for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=True):
                         end_idx = min(start_idx + self.minibatch_size, dataset_size)
+                        if end_idx - start_idx < self.minibatch_size / 2:
+                            break
+                        
                         batch_indices = indices[start_idx:end_idx]
                         
                         batch_states = state_tensor[batch_indices]
@@ -178,17 +180,19 @@ class ReinforceTrainer:
 
                     # Eval Net vs Net
                     print("Running Eval Net vs Net...")
-                    net_vs_net_handler = NetVsNetEvalHandler(num_games=512, batch_size=64, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
+                    net_vs_net_handler = NetVsNetEvalHandler(num_games=128, batch_size=64, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
                     net_vs_net_res = net_vs_net_handler.eval()
                     self.eval_net_vs_net_results[num_games_completed] = net_vs_net_res
                     print(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
 
                     # Eval vs Stockfish
                     print("Running Eval vs Stockfish...")
-                    stockfish_handler = StockfishEvalHandler(num_games=512, batch_size=64, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=1350, stockfish_time_per_move=10)
+                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=64, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=1350, stockfish_time_per_move=10)
                     stockfish_res = stockfish_handler.eval()
                     self.eval_stockfish_results[num_games_completed] = stockfish_res
                     print(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
+
+                    # TODO: delete checkpoint if not best yet win rate?
                 
                 self.completed_rollouts = []
 
@@ -199,7 +203,7 @@ def main():
         weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth"),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         num_games=100_000, # TODO increase
-        checkpoint_interval=10_000,
+        checkpoint_interval=1_000, # TODO
         game_batch_size=64,
         minibatch_size=64,
         update_rollout_size=128, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories

@@ -13,7 +13,7 @@ class EvalHandler:
         self.boards = [chess.Board() for _ in range(batch_size)]
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {device}")
+        #print(f"Using device: {device}")
         
         self.model_handler_primary = ChessNetHandler(self.boards, ChessNet(), device)
         self.model_handler_primary.model.load_state_dict(torch.load(weights_path_primary), strict=False)

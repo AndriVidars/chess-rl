@@ -23,7 +23,7 @@ class EvalHandler:
         self.stockfish_handler = StockFishAgentHandler(stockfish_path, stockfish_elo, stockfish_time_per_move)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {device}")
+        #print(f"Using device: {device}")
         
         self.model_handler = ChessNetHandler(self.boards, ChessNet(), device)
         self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
