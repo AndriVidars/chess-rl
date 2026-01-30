@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from RL.chess_net import ChessNet
 from RL.game_environment.game import Game
 from RL.game_environment.chess_net_agent import ChessNetAgent, ChessNetHandler, Trajectory
+from RL.eval.eval_net_vs_net import EvalHandler as NetVsNetEvalHandler
+from RL.eval.eval_vs_stockfish import EvalHandler as StockfishEvalHandler
 
 
 class ReinforceTrainer:
@@ -22,11 +24,13 @@ class ReinforceTrainer:
                  minibatch_size: int = 32, 
                  update_rollout_size: int = 128,  
                  epochs: int = 5,
+                 max_grad_norm: float = 1.0,
                  ):
         
         self.device = device
         print(f"\n\nRunning on Device: {self.device}\n\n")
 
+        self.init_weights_path = weights_path
         self.num_games = num_games
         self.game_batch_size = game_batch_size # number of games run in parallel when collecting trajectories
         self.boards = [chess.Board() for _ in range(self.game_batch_size)]
@@ -50,7 +54,11 @@ class ReinforceTrainer:
         self.epochs = epochs # number of epochs to run for each update
         self.completed_rollouts = []
         self.checkpoint_interval = checkpoint_interval
+        self.stockfish_path = os.path.join(os.path.dirname(__file__), "..", "stockfish", "stockfish.exe")
+        self.eval_net_vs_net_results = {}
+        self.eval_stockfish_results = {}
         self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..", "checkpoints")
+        self.max_grad_norm = max_grad_norm
 
         self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-4)
 
@@ -122,7 +130,6 @@ class ReinforceTrainer:
                 indices = list(range(dataset_size))
                 
                 self.model_handler.model.train()
-
                 # Capture initial parameters to measure update magnitude
                 initial_params = [p.clone().detach() for p in self.model_handler.model.parameters()]
                 for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs"):
@@ -153,8 +160,10 @@ class ReinforceTrainer:
                         
                         self.optimizer.zero_grad()
                         loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.model_handler.model.parameters(), self.max_grad_norm)
                         self.optimizer.step()
                 
+                self.model_handler.model.eval()
                 # Calculate update magnitude
                 final_params = [p for p in self.model_handler.model.parameters()]
                 update_diff = [p_final - p_init for p_final, p_init in zip(final_params, initial_params)]
@@ -163,11 +172,24 @@ class ReinforceTrainer:
 
                 if num_games_completed - last_checkpoint >= self.checkpoint_interval:
                     print(f"Saving checkpoint at {num_games_completed} games completed")
-                    torch.save(self.model_handler.model.state_dict(), os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth"))
+                    checkpoint_path = os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth")
+                    torch.save(self.model_handler.model.state_dict(), checkpoint_path)
                     last_checkpoint = num_games_completed
-                
-                # TODO: periodic eval against stockfish
 
+                    # Eval Net vs Net
+                    print("Running Eval Net vs Net...")
+                    net_vs_net_handler = NetVsNetEvalHandler(num_games=512, batch_size=64, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
+                    net_vs_net_res = net_vs_net_handler.eval()
+                    self.eval_net_vs_net_results[num_games_completed] = net_vs_net_res
+                    print(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
+
+                    # Eval vs Stockfish
+                    print("Running Eval vs Stockfish...")
+                    stockfish_handler = StockfishEvalHandler(num_games=512, batch_size=64, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=1350, stockfish_time_per_move=10)
+                    stockfish_res = stockfish_handler.eval()
+                    self.eval_stockfish_results[num_games_completed] = stockfish_res
+                    print(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
+                
                 self.completed_rollouts = []
 
 
