@@ -15,13 +15,13 @@ class Game:
         self.board.push(move)
 
     
-    def get_result(self):
+    def get_result(self) -> Agent | None:
         assert self.board.is_game_over()
         outcome = self.board.outcome()
         if outcome.winner == chess.WHITE:
-            return type(self.agent_white)
+            return self.agent_white
         elif outcome.winner == chess.BLACK:
-            return type(self.agent_black)
+            return self.agent_black
         else:
             return None
 

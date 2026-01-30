@@ -5,19 +5,23 @@ import os
 from RL.chess_net import ChessNet
 from RL.game_environment.game import Game
 from RL.game_environment.chess_net_agent import ChessNetAgent, ChessNetHandler
-from RL.game_environment.stockfish_agent import StockFishAgent
+from RL.game_environment.stockfish_agent import StockFishAgent, StockFishAgentHandler
 
 
 class EvalHandler:
-    def __init__(self, num_games: int, batch_size: int, weights_path: str, stockfish_path: str, stockfish_elo, stockfish_time_per_move):
+    def __init__(self,
+                 num_games: int, 
+                 batch_size: int, 
+                 weights_path: str, 
+                 stockfish_path: str,
+                 stockfish_elo: int, 
+                 stockfish_time_per_move: int):
         self.num_games = num_games
         self.batch_size = batch_size
         self.boards = [chess.Board() for _ in range(batch_size)]
         
-        self.stockfish_path = stockfish_path
-        self.stockfish_elo = stockfish_elo
-        self.stockfish_time_per_move = stockfish_time_per_move
-        
+        self.stockfish_handler = StockFishAgentHandler(stockfish_path, stockfish_elo, stockfish_time_per_move)
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
         
@@ -28,7 +32,7 @@ class EvalHandler:
         self.games = [self.assign_agents(board_idx) for board_idx in range(self.batch_size)]
 
     def assign_agents(self, board_idx: int):
-        stockfish_agent = StockFishAgent(self.boards[board_idx], self.stockfish_path, self.stockfish_elo, self.stockfish_time_per_move)
+        stockfish_agent = StockFishAgent(self.stockfish_handler, self.boards[board_idx])
         chessnet_agent = ChessNetAgent(self.model_handler, self.boards[board_idx], board_idx)
         
         agent_white = stockfish_agent if random.random() < 0.5 else chessnet_agent
@@ -50,10 +54,11 @@ class EvalHandler:
                 game.make_turn()
                 if game.board.is_game_over():
                     winner = game.get_result()
-                    if winner == type(self.model_handler.model):
-                        wins += 1
-                    elif winner is None:
+                    if winner is None:
                         ties += 1
+                    elif isinstance(winner, ChessNetAgent):
+                        wins += 1
+                    
                     num_moves_total += game.board.fullmove_number
                     games_completed += 1
                     self.boards[i].reset()
@@ -78,8 +83,8 @@ def main():
     
     stockfish_elo = 1350
     stockfish_time_per_move = 5
-    num_games = 1024 # 1024
-    batch_size = 64 # 64
+    num_games = 128 # 1024
+    batch_size = 32 # 64
     
     handler = EvalHandler(num_games, batch_size, weights_path, stockfish_path, stockfish_elo, stockfish_time_per_move)
     results = handler.eval()
