@@ -115,7 +115,7 @@ def main():
 
     num_imitation_games = 4096
     elo = 1600
-    batch_size = 64 # 64
+    batch_size = 512 # 64
     num_epochs = 5 # 5
     
     
