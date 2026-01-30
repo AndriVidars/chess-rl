@@ -60,6 +60,9 @@ class ReinforceTrainer:
         self.checkpoint_dir = os.path.join(os.path.dirname(__file__), "..", "checkpoints")
         self.max_grad_norm = max_grad_norm
 
+        self.best_stockfish_win_rate = -1.0
+        self.best_stockfish_tie_rate = -1.0
+
         self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-4)
 
         num_params = sum(p.numel() for p in self.model_handler.model.parameters())
@@ -192,7 +195,16 @@ class ReinforceTrainer:
                     self.eval_stockfish_results[num_games_completed] = stockfish_res
                     print(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
 
-                    # TODO: delete checkpoint if not best yet win rate?
+                    # Check if best model logic
+                    win_rate, tie_rate, _, _ = stockfish_res
+                    
+                    if win_rate > self.best_stockfish_win_rate or (win_rate == self.best_stockfish_win_rate and tie_rate > self.best_stockfish_tie_rate):
+                        print(f"New best model found! (Win Rate: {win_rate}, Tie Rate: {tie_rate})")
+                        self.best_stockfish_win_rate = win_rate
+                        self.best_stockfish_tie_rate = tie_rate
+                    else:
+                        if os.path.exists(checkpoint_path):
+                            os.remove(checkpoint_path)
                 
                 self.completed_rollouts = []
 
