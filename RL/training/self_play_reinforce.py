@@ -131,30 +131,33 @@ class ReinforceTrainer:
                 # gather rollouts and convert to tensors
                 all_states = []
                 all_actions = []
-                all_returns = []
                 all_values = []
+                traj_rewards = []
+                traj_lengths = []
 
                 for rollout in self.completed_rollouts:
                     for traj in rollout.values():
                         all_states.extend(traj.states)
                         all_actions.extend(traj.actions)
                         all_values.extend(traj.values)
-                        
-                        # Calculate discounted returns (initial reward only given at end of game)
-                        G = 0
-                        traj_returns = []
-                        for i in reversed(range(len(traj.states))):
-                            r = traj.reward if i == len(traj.states) - 1 else 0
-                            G = r + self.gamma * G
-                            traj_returns.insert(0, G)
-                        all_returns.extend(traj_returns)
+                        traj_rewards.append(traj.reward)
+                        traj_lengths.append(len(traj.states))
                 
                 logging.info(f"Number of states (moves) in rollout batch: {len(all_states)}")
 
                 state_tensor = torch.stack(all_states)
                 action_tensor = torch.stack(all_actions)
                 value_tensor = torch.stack(all_values).squeeze(-1) # (N,)
-                return_tensor = torch.tensor(all_returns, device=self.device, dtype=torch.float32)
+
+                # Vectorized return calculation
+                rewards_tensor = torch.tensor(traj_rewards, device=self.device, dtype=torch.float32)
+                lengths_tensor = torch.tensor(traj_lengths, device=self.device, dtype=torch.long)
+                
+                # Create a temporary rewards tensor for the final rewards and use the number of moves within each rollout to discount and expand later on
+                expanded_rewards = torch.repeat_interleave(rewards_tensor, lengths_tensor)
+                powers = torch.cat([torch.arange(l - 1, -1, -1, device=self.device) for l in traj_lengths])
+
+                return_tensor = expanded_rewards * (self.gamma ** powers)
                 advantage_tensor = return_tensor - value_tensor # advantage function, actor critic style
                 
                 # Training Loop
