@@ -3,6 +3,8 @@ import random
 import torch
 from tqdm import tqdm
 import os
+import logging
+from datetime import datetime
 import torch.nn.functional as F
 from RL.chess_net import ChessNet
 from RL.game_environment.game import Game
@@ -25,12 +27,37 @@ class ReinforceTrainer:
                  update_rollout_size: int = 128,  
                  epochs: int = 5,
                  max_grad_norm: float = 1.0,
+                 base_num_games: int = 10_000,
+                 base_elo: int = 1500,
+                 eval_elo: int = 1350,
+                 gamma: float = 0.99, # discount rate
+                 entropy_coef: float = 0.01, # entropy regularization coefficient
+                 lr: float = 1e-4, # learning rate
+                 lr_step_size: int = 1000, # number of steps between learning rate updates
+                 lr_gamma: float = 0.9 # learning rate decay factor
                  ):
         
+        
+        
+        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(log_dir, f"log_{base_num_games}_{base_elo}_{num_games}_{timestamp}.txt")
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S', handlers=[logging.FileHandler(log_file), logging.StreamHandler()])
+        
         self.device = device
-        print(f"\n\nRunning on Device: {self.device}\n\n")
+        logging.info(f"Running on Device: {self.device}")
 
         self.init_weights_path = weights_path
+        self.base_num_games = base_num_games
+        self.base_elo = base_elo
+        self.eval_elo = eval_elo
+        self.prev_best_checkpoint_path = None
+        self.gamma = gamma
+        self.entropy_coef = entropy_coef
+        self.lr = lr
+        self.lr_step_size = lr_step_size
+        self.lr_gamma = lr_gamma
         self.num_games = num_games
         self.game_batch_size = game_batch_size # number of games run in parallel when collecting trajectories
         self.boards = [chess.Board() for _ in range(self.game_batch_size)]
@@ -49,8 +76,8 @@ class ReinforceTrainer:
             for i in range(self.game_batch_size)
         ]
         
-        self.minibatch_size = minibatch_size # batch size for gradient update
-        self.update_rollout_size = update_rollout_size # number complete game rollouts to collect before updating with gradient on moves
+        self.minibatch_size = minibatch_size # batch size (number of states) for gradient update
+        self.update_rollout_size = update_rollout_size # number of complete game rollouts to collect before updating with gradient on states and actions (moves)
         self.epochs = epochs # number of epochs to run for each update
         self.completed_rollouts = []
         self.checkpoint_interval = checkpoint_interval
@@ -63,10 +90,11 @@ class ReinforceTrainer:
         self.best_stockfish_win_rate = -1.0
         self.best_stockfish_tie_rate = -1.0
 
-        self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=1e-3)
+        self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=self.lr)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma)
 
         num_params = sum(p.numel() for p in self.model_handler.model.parameters())
-        print(f"Model has {num_params} parameters\n")
+        logging.info(f"Model has {num_params} parameters")
     
     def train(self):
         num_games_completed = 0
@@ -102,7 +130,7 @@ class ReinforceTrainer:
 
 
             if len(self.completed_rollouts) >= self.update_rollout_size:
-                print(f"Running policy update after: {num_games_completed} games completed")
+                logging.info(f"Running policy update after: {num_games_completed} games completed")
                 # gather rollouts and convert to tensors
                 all_states = []
                 all_actions = []
@@ -114,18 +142,23 @@ class ReinforceTrainer:
                         all_states.extend(traj.states)
                         all_actions.extend(traj.actions)
                         all_values.extend(traj.values)
-                        all_returns.extend([traj.reward] * len(traj.states))
+                        
+                        # Calculate discounted returns (initial reward only given at end of game)
+                        G = 0
+                        traj_returns = []
+                        for i in reversed(range(len(traj.states))):
+                            r = traj.reward if i == len(traj.states) - 1 else 0
+                            G = r + self.gamma * G
+                            traj_returns.insert(0, G)
+                        all_returns.extend(traj_returns)
                 
-                print(f"Number of states (moves) in rollout batch: {len(all_states)}")
+                logging.info(f"Number of states (moves) in rollout batch: {len(all_states)}")
 
                 state_tensor = torch.stack(all_states)
                 action_tensor = torch.stack(all_actions)
                 value_tensor = torch.stack(all_values).squeeze(-1) # (N,)
                 return_tensor = torch.tensor(all_returns, device=self.device, dtype=torch.float32)
-
-                # Compute Advantage
-                # A = R - V
-                advantage_tensor = return_tensor - value_tensor
+                advantage_tensor = return_tensor - value_tensor # advantage function, actor critic style
                 
                 # Training Loop
                 dataset_size = state_tensor.shape[0]
@@ -152,7 +185,9 @@ class ReinforceTrainer:
                         values = values.squeeze(-1)
                         
                         # Policy Loss
+                        probs = F.softmax(logits, dim=1)
                         log_probs = F.log_softmax(logits, dim=1)
+                        
                         # Gather log probs for the specific actions taken
                         action_log_probs = log_probs.gather(1, batch_actions.unsqueeze(1)).squeeze(1)
                         
@@ -161,7 +196,11 @@ class ReinforceTrainer:
                         # Value Loss
                         value_loss = F.mse_loss(values, batch_returns)
                         
-                        loss = policy_loss + value_loss
+                        # Entropy Loss (Regularization)
+                        dist = torch.distributions.Categorical(probs)
+                        entropy = dist.entropy().mean()
+                        
+                        loss = policy_loss + value_loss - self.entropy_coef * entropy
                         
                         self.optimizer.zero_grad()
                         loss.backward()
@@ -173,51 +212,69 @@ class ReinforceTrainer:
                 final_params = [p for p in self.model_handler.model.parameters()]
                 update_diff = [p_final - p_init for p_final, p_init in zip(final_params, initial_params)]
                 update_magnitude = torch.norm(torch.stack([torch.norm(diff) for diff in update_diff]))
-                print(f"Update Magnitude (L2 Norm of param change): {update_magnitude.item():.6f}\n")
+                logging.info(f"Update Magnitude (L2 Norm of param change): {update_magnitude.item():.6f}")
 
                 if num_games_completed - last_checkpoint >= self.checkpoint_interval:
-                    print(f"Saving checkpoint at {num_games_completed} games completed")
+                    logging.info(f"Saving checkpoint at {num_games_completed} games completed")
                     checkpoint_path = os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth")
                     torch.save(self.model_handler.model.state_dict(), checkpoint_path)
                     last_checkpoint = num_games_completed
 
                     # Eval Net vs Net
-                    print("Running Eval Net vs Net...")
-                    net_vs_net_handler = NetVsNetEvalHandler(num_games=128, batch_size=64, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
+                    logging.info("Running Eval Net vs Net...")
+                    net_vs_net_handler = NetVsNetEvalHandler(num_games=128, batch_size=128, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
                     net_vs_net_res = net_vs_net_handler.eval()
                     self.eval_net_vs_net_results[num_games_completed] = net_vs_net_res
-                    print(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
+                    logging.info(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
 
                     # Eval vs Stockfish
-                    print("Running Eval vs Stockfish...")
-                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=64, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=1350, stockfish_time_per_move=5)
+                    logging.info("Running Eval vs Stockfish...")
+                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=128, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=self.eval_elo, stockfish_time_per_move=5)
                     stockfish_res = stockfish_handler.eval()
                     self.eval_stockfish_results[num_games_completed] = stockfish_res
-                    print(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
+                    logging.info(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
 
                     win_rate, tie_rate, _, _ = stockfish_res                    
                     if win_rate > self.best_stockfish_win_rate or (win_rate == self.best_stockfish_win_rate and tie_rate > self.best_stockfish_tie_rate):
-                        print(f"New best model found! (Win Rate: {win_rate}, Tie Rate: {tie_rate})")
+                        logging.info(f"New best model found! (Win Rate: {win_rate}, Tie Rate: {tie_rate})")
                         self.best_stockfish_win_rate = win_rate
                         self.best_stockfish_tie_rate = tie_rate
+                        
+                        # Rename to permanent best checkpoint
+                        formatted_win_rate = f"{win_rate:.4f}".replace(".", "")
+                        new_best_path = os.path.join(self.checkpoint_dir, f"post_trained_{self.base_num_games}_{self.base_elo}_{self.eval_elo}_{formatted_win_rate}.pth")
+                        
+                        if self.prev_best_checkpoint_path and os.path.exists(self.prev_best_checkpoint_path):
+                            os.remove(self.prev_best_checkpoint_path)
+                            
+                        os.rename(checkpoint_path, new_best_path)
+                        self.prev_best_checkpoint_path = new_best_path
                     else:
                         if os.path.exists(checkpoint_path):
                             os.remove(checkpoint_path)
-                
+                            
                 self.completed_rollouts = []
+                self.scheduler.step()
+                logging.info(f"Stepped Scheduler. New Learning Rate: {self.scheduler.get_last_lr()[0]}")
 
 
             
 def main():
+    base_num_games = 10_000
+    base_elo = 1400
+    eval_elo = 1350
     trainer = ReinforceTrainer(
-        weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth"),
+        weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{base_num_games}_{base_elo}.pth"),
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        num_games=100_000, # TODO increase
+        num_games=1_000_000, # TODO increase
         checkpoint_interval=4096, # TODO increase
         game_batch_size=128,
-        minibatch_size=1024,
+        minibatch_size=1024, # states per minibatch
         update_rollout_size=256, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories
-        epochs=3 # TUNE
+        epochs=3, # TUNE
+        base_num_games=base_num_games,
+        base_elo=base_elo,
+        eval_elo=eval_elo
     )
     trainer.train()
 
