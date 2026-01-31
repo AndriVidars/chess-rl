@@ -15,7 +15,9 @@ from RL.eval.eval_vs_stockfish import EvalHandler as StockfishEvalHandler
 
 class ReinforceTrainer:
     def __init__(self,
-                 weights_path: str,
+                 weights_path_init_trainable: str,
+                 weights_path_init_opponent: str, # frozen weights for opponent, incrementaly updated
+                 weights_path_eval: str, # frozen weights for evaluation, incrementaly updated
                  device: torch.device,
                  num_games: int,
                  checkpoint_interval: int,
@@ -26,7 +28,7 @@ class ReinforceTrainer:
                  max_grad_norm: float = 1.0,
                  base_num_games: int = 10_000,
                  base_elo: int = 1500,
-                 eval_elo: int = 1350,
+                 eval_elo: int = 1350, # incrementaly update? TODO?
                  gamma: float = 0.99, # discount rate
                  entropy_coef: float = 0.01, # entropy regularization coefficient
                  lr: float = 1e-4, # learning rate
@@ -45,7 +47,10 @@ class ReinforceTrainer:
         self.device = device
         logging.info(f"Running on Device: {self.device}")
 
-        self.init_weights_path = weights_path
+        self.weights_path_init_trainable = weights_path_init_trainable
+        self.weights_path_init_opponent = weights_path_init_opponent
+        self.weights_path_eval = weights_path_eval
+        
         self.base_num_games = base_num_games
         self.base_elo = base_elo
         self.eval_elo = eval_elo
@@ -59,20 +64,36 @@ class ReinforceTrainer:
         self.game_batch_size = game_batch_size # number of games run in parallel when collecting trajectories
         self.boards = [chess.Board() for _ in range(self.game_batch_size)]
         
-        self.active_rollouts = [{chess.WHITE: Trajectory(), chess.BLACK: Trajectory()} for _ in range(self.game_batch_size)]
-        self.model_handler = ChessNetHandler(self.boards, ChessNet(), device, collect_trajectories=True, trajectories=self.active_rollouts)
-        self.model_handler.model.load_state_dict(torch.load(weights_path), strict=False)
-        self.model_handler.model.eval()
+        self.active_rollouts = [Trajectory() for _ in range(self.game_batch_size)]
         
-        self.games = [
-            Game(
+        self.model_handler_trainable = ChessNetHandler(self.boards, ChessNet(), device, collect_trajectories=True, trajectories=self.active_rollouts)
+        self.model_handler_trainable.model.load_state_dict(torch.load(weights_path_init_trainable), strict=False)
+        self.model_handler_trainable.model.eval()
+        
+        # TODO: generalize to use a distribution of different opponent agents
+        self.model_handler_opponent = ChessNetHandler(self.boards, ChessNet(), device, collect_trajectories=False, trajectories=None)
+        self.model_handler_opponent.model.load_state_dict(torch.load(weights_path_init_opponent), strict=False)
+        self.model_handler_opponent.model.eval()
+
+        self.games = []
+        self.training_agent_is_white = []
+        for i in range(self.game_batch_size):
+            is_white = random.random() < 0.5 # if true, trainable plays white
+            self.training_agent_is_white.append(is_white)
+
+            self.games.append(Game(
                 self.boards[i], 
-                ChessNetAgent(self.model_handler, self.boards[i], i), 
-                ChessNetAgent(self.model_handler, self.boards[i], i)
-            ) 
-            for i in range(self.game_batch_size)
-        ]
+                ChessNetAgent(self.model_handler_trainable if is_white else self.model_handler_opponent, self.boards[i], i), 
+                ChessNetAgent(self.model_handler_trainable if not is_white else self.model_handler_opponent, self.boards[i], i)
+            ))
         
+        # Assign colors to handlers based on the schedule
+        trainable_colors = [chess.WHITE if is_white else chess.BLACK for is_white in self.training_agent_is_white]
+        opponent_colors = [chess.BLACK if is_white else chess.WHITE for is_white in self.training_agent_is_white]
+        
+        self.model_handler_trainable.set_agent_colors(trainable_colors)
+        self.model_handler_opponent.set_agent_colors(opponent_colors)
+
         self.minibatch_size = minibatch_size # batch size (number of states) for gradient update
         self.update_rollout_size = update_rollout_size # number of complete game rollouts to collect before updating with gradient on states and actions (moves)
         self.epochs = epochs # number of epochs to run for each update
@@ -87,13 +108,14 @@ class ReinforceTrainer:
         self.best_stockfish_win_rate = -1.0
         self.best_stockfish_tie_rate = -1.0
 
-        self.optimizer = torch.optim.Adam(self.model_handler.model.parameters(), lr=self.lr)
+        self.optimizer = torch.optim.Adam(self.model_handler_trainable.model.parameters(), lr=self.lr)
         self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma)
 
-        num_params = sum(p.numel() for p in self.model_handler.model.parameters())
+        num_params = sum(p.numel() for p in self.model_handler_trainable.model.parameters())
         logging.info(f"Model has {num_params} parameters")
     
     def train(self):
+        num_turns = 0
         num_games_completed = 0
         last_checkpoint = 0
         
@@ -105,26 +127,25 @@ class ReinforceTrainer:
                 
                 if game.board.is_game_over():
                     num_games_completed += 1
-                    results = game.get_result()
-                    if results == chess.WHITE:
-                        self.active_rollouts[i][chess.WHITE].reward = 1
-                        self.active_rollouts[i][chess.BLACK].reward = -1
-                    elif results == chess.BLACK:
-                        self.active_rollouts[i][chess.WHITE].reward = -1
-                        self.active_rollouts[i][chess.BLACK].reward = 1
-                    else:
-                        self.active_rollouts[i][chess.WHITE].reward = 0
-                        self.active_rollouts[i][chess.BLACK].reward = 0
+                    winner = game.get_winner()
+                    if winner is None:
+                        self.active_rollouts[i].reward = 0 # draw
+                    elif winner == game.agent_white and isinstance(game.agent_white, ChessNetAgent):
+                        if game.agent_white.model_handler == self.model_handler_trainable:
+                            self.active_rollouts[i].reward = 1
+                        else:
+                            self.active_rollouts[i].reward = -1
+                    elif winner == game.agent_black and isinstance(game.agent_black, ChessNetAgent):
+                        if game.agent_black.model_handler == self.model_handler_trainable:
+                            self.active_rollouts[i].reward = 1
+                        else:
+                            self.active_rollouts[i].reward = -1
 
                     self.completed_rollouts.append(self.active_rollouts[i])
-                    self.active_rollouts[i] = {chess.WHITE: Trajectory(), chess.BLACK: Trajectory()}
-
-                    self.boards[i].reset()
-                    if num_games_completed < self.num_games:
-                        self.games[i] = Game(self.boards[i], ChessNetAgent(self.model_handler, self.boards[i], i), ChessNetAgent(self.model_handler, self.boards[i], i))
-                    else:
-                        self.games[i] = None  
-
+                    self.active_rollouts[i] = Trajectory()
+                    self.boards[i].reset() # reset board, agents/handlers stay the same
+                
+                num_turns += 1
 
             if len(self.completed_rollouts) >= self.update_rollout_size:
                 logging.info(f"Running policy update after: {num_games_completed} games completed")
@@ -164,9 +185,9 @@ class ReinforceTrainer:
                 dataset_size = state_tensor.shape[0]
                 indices = list(range(dataset_size))
                 
-                self.model_handler.model.train()
+                self.model_handler_trainable.model.train()
                 # Capture initial parameters to measure update magnitude
-                initial_params = [p.clone().detach() for p in self.model_handler.model.parameters()]
+                initial_params = [p.clone().detach() for p in self.model_handler_trainable.model.parameters()]
                 for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs", disable=True):
                     random.shuffle(indices)
                     for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=True):
@@ -181,7 +202,7 @@ class ReinforceTrainer:
                         batch_returns = return_tensor[batch_indices]
                         batch_advantages = advantage_tensor[batch_indices]
                         
-                        logits, values = self.model_handler.model(batch_states)
+                        logits, values = self.model_handler_trainable.model(batch_states)
                         values = values.squeeze(-1)
                         
                         # Policy Loss
@@ -202,12 +223,12 @@ class ReinforceTrainer:
                         
                         self.optimizer.zero_grad()
                         loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model_handler.model.parameters(), self.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(self.model_handler_trainable.model.parameters(), self.max_grad_norm)
                         self.optimizer.step()
                 
-                self.model_handler.model.eval()
+                self.model_handler_trainable.model.eval()
                 # Calculate update magnitude
-                final_params = [p for p in self.model_handler.model.parameters()]
+                final_params = [p for p in self.model_handler_trainable.model.parameters()]
                 update_diff = [p_final - p_init for p_final, p_init in zip(final_params, initial_params)]
                 update_magnitude = torch.norm(torch.stack([torch.norm(diff) for diff in update_diff]))
                 logging.info(f"Update Magnitude (L2 Norm of param change): {update_magnitude.item():.6f}")
@@ -215,12 +236,12 @@ class ReinforceTrainer:
                 if num_games_completed - last_checkpoint >= self.checkpoint_interval:
                     logging.info(f"Saving checkpoint at {num_games_completed} games completed")
                     checkpoint_path = os.path.join(self.checkpoint_dir, f"self_play_{num_games_completed}.pth")
-                    torch.save(self.model_handler.model.state_dict(), checkpoint_path)
+                    torch.save(self.model_handler_trainable.model.state_dict(), checkpoint_path)
                     last_checkpoint = num_games_completed
 
                     # Eval Net vs Net
                     logging.info("Running Eval Net vs Net...")
-                    net_vs_net_handler = NetVsNetEvalHandler(num_games=128, batch_size=128, weights_path_primary=checkpoint_path, weights_path_baseline=self.init_weights_path)
+                    net_vs_net_handler = NetVsNetEvalHandler(num_games=128, batch_size=128, weights_path_primary=checkpoint_path, weights_path_baseline=self.weights_path_eval)
                     net_vs_net_res = net_vs_net_handler.eval()
                     self.eval_net_vs_net_results[num_games_completed] = net_vs_net_res
                     logging.info(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
@@ -258,15 +279,21 @@ class ReinforceTrainer:
 
             
 def main():
-    base_num_games = 10_000
-    base_elo = 1500
+    base_num_games = 4096
+    base_elo = 1600
     eval_elo = 1350
+    weights_path_init_trainable = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{base_num_games}_{base_elo}.pth")
+    weights_path_init_opponent = weights_path_eval = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_32_{base_elo}.pth")
+    weights_path_eval = weights_path_init_opponent
+
     trainer = ReinforceTrainer(
-        weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{base_num_games}_{base_elo}.pth"),
+        weights_path_init_trainable = weights_path_init_trainable,
+        weights_path_init_opponent = weights_path_init_opponent,
+        weights_path_eval = weights_path_eval,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         num_games=1_000_000, # TODO increase
-        checkpoint_interval=4096, # TODO increase
-        game_batch_size=128,
+        checkpoint_interval=256, # TODO increase
+        game_batch_size=52,
         minibatch_size=1024, # states per minibatch
         update_rollout_size=256, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories
         epochs=3, # TUNE

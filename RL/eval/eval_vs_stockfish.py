@@ -53,7 +53,7 @@ class EvalHandler:
                     continue
                 game.make_turn()
                 if game.board.is_game_over():
-                    winner = game.get_result()
+                    winner = game.get_winner()
                     if winner is None:
                         ties += 1
                     elif isinstance(winner, ChessNetAgent):
