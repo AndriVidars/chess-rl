@@ -113,11 +113,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    num_imitation_games = 4096
-    elo = 1600
+    num_imitation_games = 10_000
+    elo = 1500
     batch_size = 512 # 64
     num_epochs = 5 # 5
-    
     
     dataset_path = os.path.join(os.path.dirname(__file__), "..", "data", f"imitation_data_{num_imitation_games}_{elo}.pt")
     dataset = torch.load(dataset_path, weights_only=False)

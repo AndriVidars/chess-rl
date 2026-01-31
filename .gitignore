@@ -16,3 +16,5 @@ stockfish.exe
 *.pth
 
 chess_rl.egg-info/
+
+RL/training/logs/

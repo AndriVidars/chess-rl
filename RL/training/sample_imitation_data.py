@@ -9,13 +9,14 @@ import time
 
 from RL.encode_board import encode_board_state
 
-def worker_generate_batch(stockfish_path, batch_size, elo=1600, time_per_move=10):
+def worker_generate_batch(stockfish_path, batch_size, elo=1500, time_per_move=5):
     stockfish = Stockfish(path=stockfish_path)
     stockfish.set_elo_rating(elo)
 
     data = []
     
-    for _ in range(batch_size):
+    #st = time.time()
+    for i in range(batch_size):
         board = chess.Board()
         
         while not board.is_game_over() and board.fullmove_number < 120:
@@ -39,6 +40,12 @@ def worker_generate_batch(stockfish_path, batch_size, elo=1600, time_per_move=10
             
             # Make the move on the board to proceed
             board.push(move)
+        
+        """
+        if i > 0 and i % 100 == 0:
+            et = time.time()
+            print(f"Completed {i + 1} games on worker, time per game: {(et-st)/(i + 1):.2f} seconds")
+        """
                 
     return data
 
@@ -74,10 +81,8 @@ def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int
     # Convert to TensorDataset
     states = torch.stack([x[0] for x in results])
     move_indices = torch.tensor([x[1] for x in results], dtype=torch.long)
-    
     dataset = torch.utils.data.TensorDataset(states, move_indices)
     
-    # Save to file
     filename = f"imitation_data_{num_games}_{elo}.pt"
     save_path = os.path.join(os.path.dirname(__file__), "..", "data", filename)
     torch.save(dataset, save_path)
@@ -87,4 +92,4 @@ def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int
 
 if __name__ == "__main__":
     stockfish_path = os.path.join(os.path.dirname(__file__), "..", "stockfish", "stockfish.exe")
-    generate_imitation_data(stockfish_path, num_games=4096, elo=1600)
+    generate_imitation_data(stockfish_path, num_games=50_000, elo=1500)

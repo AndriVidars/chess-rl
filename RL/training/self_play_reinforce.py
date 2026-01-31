@@ -14,9 +14,6 @@ from RL.eval.eval_vs_stockfish import EvalHandler as StockfishEvalHandler
 
 
 class ReinforceTrainer:
-    # TODO: change and tune defaults
-    # TODO: add clipping/kl control
-    # TODO: gradient update triggered by number of moves(states), not full game rollouts?
     def __init__(self,
                  weights_path: str,
                  device: torch.device,
@@ -192,8 +189,6 @@ class ReinforceTrainer:
                         action_log_probs = log_probs.gather(1, batch_actions.unsqueeze(1)).squeeze(1)
                         
                         policy_loss = -(action_log_probs * batch_advantages).mean()
-                        
-                        # Value Loss
                         value_loss = F.mse_loss(values, batch_returns)
                         
                         # Entropy Loss (Regularization)
@@ -261,7 +256,7 @@ class ReinforceTrainer:
             
 def main():
     base_num_games = 10_000
-    base_elo = 1400
+    base_elo = 1500
     eval_elo = 1350
     trainer = ReinforceTrainer(
         weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{base_num_games}_{base_elo}.pth"),

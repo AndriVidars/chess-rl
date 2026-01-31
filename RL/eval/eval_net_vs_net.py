@@ -73,11 +73,11 @@ class EvalHandler:
         return win_rate, tie_rate, loss_rate, avg_moves
 
 def main():
-    weights_path_primary = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth")
-    weights_path_baseline = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_32_1600.pth")
+    weights_path_primary = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_10000_1500.pth")
+    weights_path_baseline = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth")
     
     num_games = 128 # 1024
-    batch_size = 16 # 64
+    batch_size = 128
     
     handler = EvalHandler(num_games, batch_size, weights_path_primary, weights_path_baseline)
     results = handler.eval()
