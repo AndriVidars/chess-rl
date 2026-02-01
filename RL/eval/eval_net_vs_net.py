@@ -29,8 +29,13 @@ class EvalHandler:
         chessnet_agent_primary = ChessNetAgent(self.model_handler_primary, self.boards[board_idx], board_idx)
         chessnet_agent_baseline = ChessNetAgent(self.model_handler_baseline, self.boards[board_idx], board_idx)
         
-        agent_white = chessnet_agent_primary if random.random() < 0.5 else chessnet_agent_baseline
-        agent_black = chessnet_agent_primary if agent_white == chessnet_agent_baseline else chessnet_agent_baseline
+        primary_is_white = random.random() < 0.5
+        
+        self.model_handler_primary.agent_colors[board_idx] = chess.WHITE if primary_is_white else chess.BLACK
+        self.model_handler_baseline.agent_colors[board_idx] = chess.BLACK if primary_is_white else chess.WHITE
+        
+        agent_white = chessnet_agent_primary if primary_is_white else chessnet_agent_baseline
+        agent_black = chessnet_agent_primary if not primary_is_white else chessnet_agent_baseline
         return Game(self.boards[board_idx], agent_white, agent_black)
 
 
@@ -55,16 +60,12 @@ class EvalHandler:
                     num_moves_total += game.board.fullmove_number
                     games_completed += 1
                     self.boards[i].reset()
+
                     if games_started < self.num_games:
                         games_started += 1
                         self.games[i] = self.assign_agents(i)
                     else:
                         self.games[i] = None
-            
-            self.model_handler_primary.cur_moves = None
-            self.model_handler_primary.cur_log_probs = None
-            self.model_handler_baseline.cur_moves = None
-            self.model_handler_baseline.cur_log_probs = None
         
         win_rate = wins / self.num_games
         tie_rate = ties / self.num_games

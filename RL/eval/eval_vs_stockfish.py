@@ -35,8 +35,12 @@ class EvalHandler:
         stockfish_agent = StockFishAgent(self.stockfish_handler, self.boards[board_idx])
         chessnet_agent = ChessNetAgent(self.model_handler, self.boards[board_idx], board_idx)
         
-        agent_white = stockfish_agent if random.random() < 0.5 else chessnet_agent
-        agent_black = stockfish_agent if agent_white == chessnet_agent else chessnet_agent
+        stockfish_is_white = random.random() < 0.5
+        
+        self.model_handler.agent_colors[board_idx] = chess.BLACK if stockfish_is_white else chess.WHITE
+        
+        agent_white = stockfish_agent if stockfish_is_white else chessnet_agent
+        agent_black = stockfish_agent if not stockfish_is_white else chessnet_agent
         return Game(self.boards[board_idx], agent_white, agent_black)
 
 
@@ -67,9 +71,6 @@ class EvalHandler:
                         self.games[i] = self.assign_agents(i)
                     else:
                         self.games[i] = None
-            
-            self.model_handler.cur_moves = None
-            self.model_handler.cur_log_probs = None
         
         win_rate = wins / self.num_games
         tie_rate = ties / self.num_games
