@@ -156,13 +156,12 @@ class ReinforceTrainer:
                 traj_rewards = []
                 traj_lengths = []
 
-                for rollout in self.completed_rollouts:
-                    for traj in rollout.values():
-                        all_states.extend(traj.states)
-                        all_actions.extend(traj.actions)
-                        all_values.extend(traj.values)
-                        traj_rewards.append(traj.reward)
-                        traj_lengths.append(len(traj.states))
+                for traj in self.completed_rollouts:
+                    all_states.extend(traj.states)
+                    all_actions.extend(traj.actions)
+                    all_values.extend(traj.values)
+                    traj_rewards.append(traj.reward)
+                    traj_lengths.append(len(traj.states))
                 
                 logging.info(f"Number of states (moves) in rollout batch: {len(all_states)}")
 
@@ -279,11 +278,11 @@ class ReinforceTrainer:
 
             
 def main():
-    base_num_games = 4096
-    base_elo = 1600
+    base_num_games = 10_000
+    base_elo = 1500
     eval_elo = 1350
     weights_path_init_trainable = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_{base_num_games}_{base_elo}.pth")
-    weights_path_init_opponent = weights_path_eval = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_32_{base_elo}.pth")
+    weights_path_init_opponent = weights_path_eval = os.path.join(os.path.dirname(__file__), "..", "checkpoints", f"pre_trained_5000_1750.pth")
     weights_path_eval = weights_path_init_opponent
 
     trainer = ReinforceTrainer(
@@ -291,12 +290,12 @@ def main():
         weights_path_init_opponent = weights_path_init_opponent,
         weights_path_eval = weights_path_eval,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        num_games=1_000_000, # TODO increase
-        checkpoint_interval=256, # TODO increase
-        game_batch_size=52,
-        minibatch_size=1024, # states per minibatch
-        update_rollout_size=256, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories
-        epochs=3, # TUNE
+        num_games=200_000, # TODO increase
+        checkpoint_interval=4096,
+        game_batch_size=512,
+        minibatch_size=2048, # states per minibatch
+        update_rollout_size=1024, # TODO TUNE or CHANGE to use number of moves(states) instead of full game trajectories
+        epochs=4, # TUNE
         base_num_games=base_num_games,
         base_elo=base_elo,
         eval_elo=eval_elo
