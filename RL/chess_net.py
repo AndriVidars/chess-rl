@@ -2,15 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import chess
-from RL.encode_board import encode_board_state, encode_legal_moves, decode_move
+from RL.encode_board import encode_board_state, encode_legal_moves, decode_move, encode_board_scalars
 from typing import List
 import os
 import concurrent.futures
 
 
 class ChessNet(nn.Module):
-    def __init__(self, embedding_dim=32, num_convs=3, num_linear=3):
-        # TODO: smaller model?
+    def __init__(self, embedding_dim=16, num_convs=2, num_linear=2):
         super(ChessNet, self).__init__()
         self.embedding_dim = embedding_dim
         
@@ -30,15 +29,22 @@ class ChessNet(nn.Module):
                 nn.ReLU()
             ))
         
+        # Scalar Features Encoder (frozen in imitation)
+        self.scalar_encoder = nn.Sequential(
+            nn.Linear(6, 32),
+            nn.ReLU()
+        )
+
         # Fully Connected MLP
         conv_output_size = ((num_convs + 1) * embedding_dim) * 8 * 8
         
-        linear_dim = 4096 # 64*64 moves
+        linear_dim = 2048 # Reduced from 4096
         self.mlp = nn.ModuleList()
         
         for i in range(num_linear):
-            in_features = (conv_output_size + 1) if i == 0 else linear_dim # +1 for turn info
-            out_features = linear_dim
+            # +1 for turn info, +32 for scalars
+            in_features = (conv_output_size + 1 + 32) if i == 0 else linear_dim 
+            out_features = linear_dim if i < num_linear - 1 else 4096
             
             if i < num_linear - 1:
                 self.mlp.append(nn.Sequential(
@@ -51,10 +57,9 @@ class ChessNet(nn.Module):
                 self.mlp.append(nn.Linear(in_features=in_features, out_features=out_features))
         
         # Value Head
-        # Same input features as MLP (conv_output_size + 1)
-        # Using a smaller MLP for value
+        # Same input features as MLP (conv_output_size + 1 + 32)
         self.value_head = nn.Sequential(
-            nn.Linear(in_features=(conv_output_size + 1), out_features=256),
+            nn.Linear(in_features=(conv_output_size + 1 + 32), out_features=256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Linear(in_features=256, out_features=1),
@@ -62,8 +67,15 @@ class ChessNet(nn.Module):
         )
 
 
-    def forward(self, x):
+    def forward(self, x, scalars=None):
         # x shape: (Batch, 65) -> [Turn, 64 squares]
+        # scalars shape: (Batch, 6)
+        
+        batch_size = x.shape[0]
+        
+        if scalars is None:
+            scalars = torch.zeros((batch_size, 6), device=x.device)
+            
         turn = x[:, 0].float().unsqueeze(1) # (Batch, 1)
         board_indices = x[:, 1:].long()     # (Batch, 64)
         
@@ -80,8 +92,11 @@ class ChessNet(nn.Module):
         
         x = x.flatten(start_dim=1)
         
-        # Concatenate Turn info
-        x = torch.cat([x, turn], dim=1)
+        # Process scalars
+        s = self.scalar_encoder(scalars)
+        
+        # Concatenate Turn info, Flattened Board, and Scalars
+        x = torch.cat([x, turn, s], dim=1)
         
         # Policy Head
         x_policy = x
@@ -98,16 +113,21 @@ def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.devic
     if num_workers > 1:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_workers)
         future_states = executor.map(encode_board_state, boards)
+        # scalar encoding is fast, no need to parallelize heavily but we can
+        future_scalars = executor.map(encode_board_scalars, boards)
+        
         future_masks = executor.map(encode_legal_moves, boards)
         board_states = torch.stack(list(future_states)).to(device) # (Batch, 65)
+        scalars = torch.stack(list(future_scalars)).to(device) # (Batch, 6)
         legal_moves_masks = torch.stack(list(future_masks)).to(device) # (Batch, 4096)
         executor.shutdown()
     else:
         board_states = torch.stack([encode_board_state(b) for b in boards]).to(device)
+        scalars = torch.stack([encode_board_scalars(b) for b in boards]).to(device)
         legal_moves_masks = torch.stack([encode_legal_moves(b) for b in boards]).to(device)
 
     with torch.no_grad():
-        logits, values = model(board_states) # (Batch, 4096), (Batch, 1)
+        logits, values = model(board_states, scalars) # (Batch, 4096), (Batch, 1)
         
         # Mask illegal moves
         logits[legal_moves_masks == 0] = float('-inf')
@@ -118,8 +138,8 @@ def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.devic
         action_indices = dist.sample() # (Batch,)
         
         moves = [decode_move(idx.item()) for idx in action_indices]
-        return moves, board_states, action_indices, values
+        return moves, board_states, scalars, action_indices, values
 
 def sample_move(model: ChessNet, board: chess.Board, device: torch.device):
-    moves, board_states, action_indices, values = sample_moves(model, [board], device)
-    return moves[0], board_states[0], action_indices[0], values[0]
+    moves, board_states, scalars, action_indices, values = sample_moves(model, [board], device)
+    return moves[0], board_states[0], scalars[0], action_indices[0], values[0]

@@ -127,9 +127,15 @@ class ReinforceTrainer:
                 
                 if game.board.is_game_over():
                     num_games_completed += 1
-                    winner = game.get_winner()
                     if winner is None:
-                        self.active_rollouts[i].reward = 0 # draw
+                        # Draw penalty relative to number of moves played
+                        num_moves = len(self.active_rollouts[i].states)
+                        if num_moves > 60:
+                            move_penalty = 0.002
+                            penalty = move_penalty * num_moves
+                            self.active_rollouts[i].reward = -penalty
+                        else:
+                            self.active_rollouts[i].reward = 0
                     elif winner == game.agent_white and isinstance(game.agent_white, ChessNetAgent):
                         if game.agent_white.model_handler == self.model_handler_trainable:
                             self.active_rollouts[i].reward = 1
@@ -143,6 +149,7 @@ class ReinforceTrainer:
 
                     self.completed_rollouts.append(self.active_rollouts[i])
                     self.active_rollouts[i] = Trajectory()
+
                     self.boards[i].reset() # reset board, agents/handlers stay the same
                 
                 num_turns += 1
@@ -151,6 +158,7 @@ class ReinforceTrainer:
                 logging.info(f"Running policy update after: {num_games_completed} games completed")
                 # gather rollouts and convert to tensors
                 all_states = []
+                all_scalars = []
                 all_actions = []
                 all_values = []
                 traj_rewards = []
@@ -158,6 +166,7 @@ class ReinforceTrainer:
 
                 for traj in self.completed_rollouts:
                     all_states.extend(traj.states)
+                    all_scalars.extend(traj.scalars)
                     all_actions.extend(traj.actions)
                     all_values.extend(traj.values)
                     traj_rewards.append(traj.reward)
@@ -166,6 +175,7 @@ class ReinforceTrainer:
                 logging.info(f"Number of states (moves) in rollout batch: {len(all_states)}")
 
                 state_tensor = torch.stack(all_states)
+                scalar_tensor = torch.stack(all_scalars)
                 action_tensor = torch.stack(all_actions)
                 value_tensor = torch.stack(all_values).squeeze(-1) # (N,)
 
@@ -197,11 +207,12 @@ class ReinforceTrainer:
                         batch_indices = indices[start_idx:end_idx]
                         
                         batch_states = state_tensor[batch_indices]
+                        batch_scalars = scalar_tensor[batch_indices]
                         batch_actions = action_tensor[batch_indices]
                         batch_returns = return_tensor[batch_indices]
                         batch_advantages = advantage_tensor[batch_indices]
                         
-                        logits, values = self.model_handler_trainable.model(batch_states)
+                        logits, values = self.model_handler_trainable.model(batch_states, batch_scalars)
                         values = values.squeeze(-1)
                         
                         # Policy Loss
@@ -267,6 +278,12 @@ class ReinforceTrainer:
                             
                         os.rename(checkpoint_path, new_best_path)
                         self.prev_best_checkpoint_path = new_best_path
+                        
+                        # Update opponent to the new best model
+                        # TODO: Maintain a pool of past best models and sample from them to prevent overfitting/cycles
+                        #self.model_handler_opponent.model.load_state_dict(self.model_handler_trainable.model.state_dict())
+                        #logging.info("Updated opponent to new best model")
+
                     else:
                         if os.path.exists(checkpoint_path):
                             os.remove(checkpoint_path)

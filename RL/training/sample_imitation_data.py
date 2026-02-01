@@ -7,7 +7,7 @@ import chess
 import torch
 import time
 
-from RL.encode_board import encode_board_state
+from RL.encode_board import encode_board_state, encode_board_scalars
 
 def worker_generate_batch(stockfish_path, batch_size, elo=1500, time_per_move=5):
     stockfish = Stockfish(path=stockfish_path)
@@ -32,21 +32,16 @@ def worker_generate_batch(stockfish_path, batch_size, elo=1500, time_per_move=5)
             # Encode state and move
             # Encoded state: 65-dim tensor
             state_tensor = encode_board_state(board)
+            scalar_tensor = encode_board_scalars(board)
             
             # Target: index of the move (from_sq * 64 + to_sq)
             move_idx = move.from_square * 64 + move.to_square
             
-            data.append((state_tensor, move_idx))
+            data.append((state_tensor, scalar_tensor, move_idx))
             
             # Make the move on the board to proceed
             board.push(move)
-        
-        """
-        if i > 0 and i % 100 == 0:
-            et = time.time()
-            print(f"Completed {i + 1} games on worker, time per game: {(et-st)/(i + 1):.2f} seconds")
-        """
-                
+                        
     return data
 
 def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int = 4096):
@@ -80,8 +75,9 @@ def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int
 
     # Convert to TensorDataset
     states = torch.stack([x[0] for x in results])
-    move_indices = torch.tensor([x[1] for x in results], dtype=torch.long)
-    dataset = torch.utils.data.TensorDataset(states, move_indices)
+    scalars = torch.stack([x[1] for x in results])
+    move_indices = torch.tensor([x[2] for x in results], dtype=torch.long)
+    dataset = torch.utils.data.TensorDataset(states, scalars, move_indices)
     
     filename = f"imitation_data_{num_games}_{elo}.pt"
     save_path = os.path.join(os.path.dirname(__file__), "..", "data", filename)
@@ -92,4 +88,4 @@ def generate_imitation_data(stockfish_path: str, elo: int = 1600, num_games: int
 
 if __name__ == "__main__":
     stockfish_path = os.path.join(os.path.dirname(__file__), "..", "stockfish", "stockfish.exe")
-    generate_imitation_data(stockfish_path, num_games=50_000, elo=1500)
+    generate_imitation_data(stockfish_path, num_games=128, elo=1500)

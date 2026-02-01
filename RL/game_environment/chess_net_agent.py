@@ -10,6 +10,7 @@ from typing import List, Dict
 class Trajectory:
     def __init__(self):
         self.states = []
+        self.scalars = []
         self.actions = []
         self.values = []
         self.reward = None
@@ -28,6 +29,7 @@ class ChessNetHandler:
         self.num_boards = len(boards)
         self.cur_moves = None
         self.cur_board_states = None
+        self.cur_scalars = None
         self.cur_action_indices = None
         self.cur_values = None
         self.collect_trajectories = collect_trajectories
@@ -42,6 +44,7 @@ class ChessNetHandler:
         
         self.cur_moves = [None] * self.num_boards
         self.cur_board_states = [None] * self.num_boards
+        self.cur_scalars = [None] * self.num_boards
         self.cur_action_indices = [None] * self.num_boards
         self.cur_values = [None] * self.num_boards
 
@@ -57,17 +60,19 @@ class ChessNetHandler:
              return
 
         # batch sample moves across all active boards
-        moves, board_states, action_indices, values = sample_moves(self.model, active_boards, self.device)
+        moves, board_states, scalars, action_indices, values = sample_moves(self.model, active_boards, self.device)
         
         for idx_in_batch, original_idx in enumerate(active_indices):
             self.cur_moves[original_idx] = moves[idx_in_batch]
             self.cur_board_states[original_idx] = board_states[idx_in_batch]
+            self.cur_scalars[original_idx] = scalars[idx_in_batch]
             self.cur_action_indices[original_idx] = action_indices[idx_in_batch]
             self.cur_values[original_idx] = values[idx_in_batch]
         
         if self.collect_trajectories:
             for original_idx in active_indices:
                 self.trajectories[original_idx].states.append(self.cur_board_states[original_idx])
+                self.trajectories[original_idx].scalars.append(self.cur_scalars[original_idx])
                 self.trajectories[original_idx].actions.append(self.cur_action_indices[original_idx])
                 self.trajectories[original_idx].values.append(self.cur_values[original_idx])
 

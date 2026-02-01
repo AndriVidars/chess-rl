@@ -24,6 +24,12 @@ class ImitationTrainer:
         self.criterion = nn.CrossEntropyLoss()
         self.device = device
         
+        # Freeze value head (as they are not used/trained in imitation learning from board-only data)
+        for param in self.net.value_head.parameters():
+            param.requires_grad = False
+
+        # also freeze value head? TODO?
+        
         self.train_losses = []
         self.eval_losses = []
         self.best_val_loss = float('inf')
@@ -50,11 +56,11 @@ class ImitationTrainer:
             
             with tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.num_epochs}") as pbar:
                 for batch in pbar:
-                    states, true_moves = batch
-                    states, true_moves = states.to(self.device), true_moves.to(self.device)
+                    states, scalars, true_moves = batch
+                    states, scalars, true_moves = states.to(self.device), scalars.to(self.device), true_moves.to(self.device)
     
                     self.optimizer.zero_grad()
-                    logits, _ = self.net(states)
+                    logits, _ = self.net(states, scalars)
                     loss = self.criterion(logits, true_moves)
                     
                     loss.backward()
@@ -78,9 +84,9 @@ class ImitationTrainer:
         
         with torch.no_grad():
             for batch in self.eval_loader:
-                states, true_moves = batch
-                states, true_moves = states.to(self.device), true_moves.to(self.device)
-                logits, _ = self.net(states)
+                states, scalars, true_moves = batch
+                states, scalars, true_moves = states.to(self.device), scalars.to(self.device), true_moves.to(self.device)
+                logits, _ = self.net(states, scalars)
                 loss = self.criterion(logits, true_moves)
                 total_loss += loss.item()
                 
@@ -113,9 +119,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    num_imitation_games = 10_000
+    num_imitation_games = 128 # 10_000
     elo = 1500
-    batch_size = 512 # 64
+    batch_size = 64 # 64
     num_epochs = 5 # 5
     
     dataset_path = os.path.join(os.path.dirname(__file__), "..", "data", f"imitation_data_{num_imitation_games}_{elo}.pt")

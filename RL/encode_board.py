@@ -41,3 +41,26 @@ def decode_move(move_idx: int):
     from_square = move_idx // 64
     to_square = move_idx % 64
     return chess.Move(from_square, to_square)
+
+def encode_board_scalars(board: chess.Board):
+    """
+    Encodes scalar features of the board.
+    Returns: Tensor (6,) [fullmove_number, halfmove_clock, castling_rights_wk, castling_rights_wq, castling_rights_bk, castling_rights_bq]
+    """
+    state = torch.zeros(6, dtype=torch.float32)
+    
+    # 1. Fullmove number (normalized, assuming typical game < 200 moves, but can go higher)
+    state[0] = min(board.fullmove_number / 100.0, 5.0) # Cap at 500 moves just in case
+    
+    # 2. Halfmove clock (moves since last pawn move or capture) - important for 50 move rule draw
+    state[1] = board.halfmove_clock / 100.0
+    
+    # 3. Castling rights
+    state[2] = 1.0 if board.has_castling_rights(chess.WHITE) else 0.0 # Any white castling
+    # Actually explicit rights are better
+    state[2] = 1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0
+    state[3] = 1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0
+    state[4] = 1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0
+    state[5] = 1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0
+    
+    return state
