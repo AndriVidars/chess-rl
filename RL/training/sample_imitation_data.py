@@ -9,7 +9,7 @@ import time
 
 from RL.encode_board import encode_board_state, encode_board_scalars
 
-def worker_generate_batch(stockfish_path, batch_size, elo=1500, time_per_move=5):
+def worker_generate_batch(stockfish_path, batch_size, elo=1500, time_per_move=25):
     stockfish = Stockfish(path=stockfish_path)
     stockfish.set_elo_rating(elo)
 

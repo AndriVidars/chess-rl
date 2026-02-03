@@ -29,7 +29,7 @@ class ReinforceTrainer:
                  base_num_games: int = 10_000,
                  base_elo: int = 1500,
                  eval_elo: int = 1350, # incrementaly update? TODO?
-                 eval_depth: int = 6,
+                 eval_time_per_move: int = 25,
                  gamma: float = 0.99, # discount rate
                  entropy_coef: float = 0.01, # entropy regularization coefficient
                  lr: float = 1e-4, # learning rate
@@ -55,7 +55,7 @@ class ReinforceTrainer:
         self.base_num_games = base_num_games
         self.base_elo = base_elo
         self.eval_elo = eval_elo
-        self.eval_depth = eval_depth
+        self.eval_time_per_move = eval_time_per_move
         self.prev_best_checkpoint_path = None
         self.gamma = gamma
         self.entropy_coef = entropy_coef
@@ -279,7 +279,7 @@ class ReinforceTrainer:
                     logging.info(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
 
                     logging.info("Running Eval vs Stockfish...")
-                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=128, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=self.eval_elo, stockfish_depth=self.eval_depth)
+                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=128, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=self.eval_elo, stockfish_time_per_move=self.eval_time_per_move)
                     stockfish_res = stockfish_handler.eval()
                     self.eval_stockfish_results[num_games_completed] = stockfish_res
                     logging.info(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
@@ -335,7 +335,7 @@ def main():
         base_num_games=base_num_games,
         base_elo=base_elo,
         eval_elo=eval_elo,
-        eval_depth=6,
+        eval_time_per_move=25,
         lr_step_size=100
     )
     trainer.train()
