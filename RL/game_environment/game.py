@@ -15,9 +15,9 @@ class Game:
         self.board.push(move)
 
     
-    def get_winner(self) -> Agent | None:
-        assert self.board.is_game_over()
-        outcome = self.board.outcome()
+    def get_winner(self, claim_draw=True) -> Agent | None:
+        assert self.board.is_game_over(claim_draw=claim_draw)
+        outcome = self.board.outcome(claim_draw=claim_draw)
         if outcome.winner == chess.WHITE:
             return self.agent_white
         elif outcome.winner == chess.BLACK:
@@ -27,8 +27,8 @@ class Game:
     
     # NOTE: Not used currently, will ne# TODO use game.play() instead of this loop? or will need to change game.play() to support batching/move caching/parallelism in train and evals?
     def play(self):
-        while not self.board.is_game_over():
+        while not self.board.is_game_over(claim_draw=True):
             self.make_turn()
-            if self.board.is_game_over():
-                return self.get_result()
+            if self.board.is_game_over(claim_draw=True):
+                return self.get_winner()
     

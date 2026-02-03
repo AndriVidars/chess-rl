@@ -14,13 +14,13 @@ class EvalHandler:
                  batch_size: int, 
                  weights_path: str, 
                  stockfish_path: str,
-                 stockfish_elo: int, 
-                 stockfish_time_per_move: int):
+                 stockfish_elo: int,
+                 stockfish_depth: int):
         self.num_games = num_games
         self.batch_size = batch_size
         self.boards = [chess.Board() for _ in range(batch_size)]
         
-        self.stockfish_handler = StockFishAgentHandler(stockfish_path, stockfish_elo, stockfish_time_per_move)
+        self.stockfish_handler = StockFishAgentHandler(stockfish_path, stockfish_elo, stockfish_depth)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         #print(f"Using device: {device}")
@@ -56,7 +56,7 @@ class EvalHandler:
                 if game is None:
                     continue
                 game.make_turn()
-                if game.board.is_game_over():
+                if game.board.is_game_over(claim_draw=True):
                     winner = game.get_winner()
                     if winner is None:
                         ties += 1
@@ -83,11 +83,11 @@ def main():
     weights_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "pre_trained_4096_1600.pth")
     
     stockfish_elo = 1350
-    stockfish_time_per_move = 5
-    num_games = 128 # 1024
-    batch_size = 32 # 64
+    stockfish_depth = 6
+    num_games = 128
+    batch_size = 32
     
-    handler = EvalHandler(num_games, batch_size, weights_path, stockfish_path, stockfish_elo, stockfish_time_per_move)
+    handler = EvalHandler(num_games, batch_size, weights_path, stockfish_path, stockfish_elo, stockfish_depth)
     results = handler.eval()
     
     print(f"Win rate: {results[0]}")

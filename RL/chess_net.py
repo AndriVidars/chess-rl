@@ -136,10 +136,11 @@ def sample_moves(model: ChessNet, boards: List[chess.Board], device: torch.devic
         probs = torch.softmax(logits, dim=1)
         dist = torch.distributions.Categorical(probs)
         action_indices = dist.sample() # (Batch,)
+        action_log_probs = dist.log_prob(action_indices) # (Batch,)
         
         moves = [decode_move(idx.item()) for idx in action_indices]
-        return moves, board_states, scalars, action_indices, values
+        return moves, board_states, scalars, action_indices, values, action_log_probs
 
 def sample_move(model: ChessNet, board: chess.Board, device: torch.device):
-    moves, board_states, scalars, action_indices, values = sample_moves(model, [board], device)
-    return moves[0], board_states[0], scalars[0], action_indices[0], values[0]
+    moves, board_states, scalars, action_indices, values, action_log_probs = sample_moves(model, [board], device)
+    return moves[0], board_states[0], scalars[0], action_indices[0], values[0], action_log_probs[0]

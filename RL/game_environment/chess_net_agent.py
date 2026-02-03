@@ -13,6 +13,7 @@ class Trajectory:
         self.scalars = []
         self.actions = []
         self.values = []
+        self.log_probs = []
         self.reward = None
 
 class ChessNetHandler:
@@ -32,6 +33,7 @@ class ChessNetHandler:
         self.cur_scalars = None
         self.cur_action_indices = None
         self.cur_values = None
+        self.cur_log_probs = None
         self.collect_trajectories = collect_trajectories
         self.trajectories = trajectories
         self.agent_colors = [None] * self.num_boards # chess.WHITE or chess.BLACK for each board
@@ -47,6 +49,7 @@ class ChessNetHandler:
         self.cur_scalars = [None] * self.num_boards
         self.cur_action_indices = [None] * self.num_boards
         self.cur_values = [None] * self.num_boards
+        self.cur_log_probs = [None] * self.num_boards
 
         active_indices = []
         active_boards = []
@@ -60,7 +63,8 @@ class ChessNetHandler:
              return
 
         # batch sample moves across all active boards
-        moves, board_states, scalars, action_indices, values = sample_moves(self.model, active_boards, self.device)
+        # Unpack returns to get action_log_probs
+        moves, board_states, scalars, action_indices, values, action_log_probs = sample_moves(self.model, active_boards, self.device)
         
         for idx_in_batch, original_idx in enumerate(active_indices):
             self.cur_moves[original_idx] = moves[idx_in_batch]
@@ -68,6 +72,7 @@ class ChessNetHandler:
             self.cur_scalars[original_idx] = scalars[idx_in_batch]
             self.cur_action_indices[original_idx] = action_indices[idx_in_batch]
             self.cur_values[original_idx] = values[idx_in_batch]
+            self.cur_log_probs[original_idx] = action_log_probs[idx_in_batch]
         
         if self.collect_trajectories:
             for original_idx in active_indices:
@@ -75,6 +80,7 @@ class ChessNetHandler:
                 self.trajectories[original_idx].scalars.append(self.cur_scalars[original_idx])
                 self.trajectories[original_idx].actions.append(self.cur_action_indices[original_idx])
                 self.trajectories[original_idx].values.append(self.cur_values[original_idx])
+                self.trajectories[original_idx].log_probs.append(self.cur_log_probs[original_idx])
 
 
 class ChessNetAgent(Agent):

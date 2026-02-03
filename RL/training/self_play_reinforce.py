@@ -29,6 +29,7 @@ class ReinforceTrainer:
                  base_num_games: int = 10_000,
                  base_elo: int = 1500,
                  eval_elo: int = 1350, # incrementaly update? TODO?
+                 eval_depth: int = 6,
                  gamma: float = 0.99, # discount rate
                  entropy_coef: float = 0.01, # entropy regularization coefficient
                  lr: float = 1e-4, # learning rate
@@ -54,6 +55,7 @@ class ReinforceTrainer:
         self.base_num_games = base_num_games
         self.base_elo = base_elo
         self.eval_elo = eval_elo
+        self.eval_depth = eval_depth
         self.prev_best_checkpoint_path = None
         self.gamma = gamma
         self.entropy_coef = entropy_coef
@@ -125,28 +127,32 @@ class ReinforceTrainer:
                     continue
                 game.make_turn()
                 
-                if game.board.is_game_over():
+                if game.board.is_game_over(claim_draw=True):
                     num_games_completed += 1
+                    winner = game.get_winner()
+                    
+                    # Calculated per absolute outcome
+                    # Penalize draws heavily to encourage winning
+                    outcome_reward = 0
                     if winner is None:
-                        # Draw penalty relative to number of moves played
-                        num_moves = len(self.active_rollouts[i].states)
-                        if num_moves > 60:
-                            move_penalty = 0.002
-                            penalty = move_penalty * num_moves
-                            self.active_rollouts[i].reward = -penalty
-                        else:
-                            self.active_rollouts[i].reward = 0
+                        outcome_reward = -0.5 # Draw is bad, but better than losing (-1)
                     elif winner == game.agent_white and isinstance(game.agent_white, ChessNetAgent):
                         if game.agent_white.model_handler == self.model_handler_trainable:
-                            self.active_rollouts[i].reward = 1
+                            outcome_reward = 1
                         else:
-                            self.active_rollouts[i].reward = -1
+                            outcome_reward = -1
                     elif winner == game.agent_black and isinstance(game.agent_black, ChessNetAgent):
                         if game.agent_black.model_handler == self.model_handler_trainable:
-                            self.active_rollouts[i].reward = 1
+                            outcome_reward = 1
                         else:
-                            self.active_rollouts[i].reward = -1
-
+                            outcome_reward = -1
+                    
+                    # Step penalty to encourage shorter games
+                    num_moves = len(self.active_rollouts[i].states)
+                    step_penalty = 0.001 * num_moves
+                    
+                    self.active_rollouts[i].reward = outcome_reward - step_penalty
+                    
                     self.completed_rollouts.append(self.active_rollouts[i])
                     self.active_rollouts[i] = Trajectory()
 
@@ -159,6 +165,7 @@ class ReinforceTrainer:
                 # gather rollouts and convert to tensors
                 all_states = []
                 all_scalars = []
+                all_old_log_probs = []
                 all_actions = []
                 all_values = []
                 traj_rewards = []
@@ -169,6 +176,7 @@ class ReinforceTrainer:
                     all_scalars.extend(traj.scalars)
                     all_actions.extend(traj.actions)
                     all_values.extend(traj.values)
+                    all_old_log_probs.extend(traj.log_probs)
                     traj_rewards.append(traj.reward)
                     traj_lengths.append(len(traj.states))
                 
@@ -177,6 +185,7 @@ class ReinforceTrainer:
                 state_tensor = torch.stack(all_states)
                 scalar_tensor = torch.stack(all_scalars)
                 action_tensor = torch.stack(all_actions)
+                old_log_probs_tensor = torch.stack(all_old_log_probs).detach()
                 value_tensor = torch.stack(all_values).squeeze(-1) # (N,)
 
                 # Vectorized return calculation
@@ -190,6 +199,9 @@ class ReinforceTrainer:
                 return_tensor = expanded_rewards * (self.gamma ** powers)
                 advantage_tensor = return_tensor - value_tensor # advantage function, actor critic style
                 
+                # Normalize advantages for PPO stability
+                advantage_tensor = (advantage_tensor - advantage_tensor.mean()) / (advantage_tensor.std() + 1e-8)
+
                 # Training Loop
                 dataset_size = state_tensor.shape[0]
                 indices = list(range(dataset_size))
@@ -197,6 +209,10 @@ class ReinforceTrainer:
                 self.model_handler_trainable.model.train()
                 # Capture initial parameters to measure update magnitude
                 initial_params = [p.clone().detach() for p in self.model_handler_trainable.model.parameters()]
+                
+                # PPO Hyperparams
+                clip_epsilon = 0.2
+                
                 for epoch in tqdm(range(self.epochs), desc="Rollout Batch Epochs", disable=True):
                     random.shuffle(indices)
                     for start_idx in tqdm(range(0, dataset_size, self.minibatch_size), desc="Minibatches", disable=True):
@@ -211,25 +227,31 @@ class ReinforceTrainer:
                         batch_actions = action_tensor[batch_indices]
                         batch_returns = return_tensor[batch_indices]
                         batch_advantages = advantage_tensor[batch_indices]
+                        batch_old_log_probs = old_log_probs_tensor[batch_indices]
                         
                         logits, values = self.model_handler_trainable.model(batch_states, batch_scalars)
                         values = values.squeeze(-1)
                         
-                        # Policy Loss
+                        # Policy Loss with PPO Clipping
                         probs = F.softmax(logits, dim=1)
                         log_probs = F.log_softmax(logits, dim=1)
                         
                         # Gather log probs for the specific actions taken
                         action_log_probs = log_probs.gather(1, batch_actions.unsqueeze(1)).squeeze(1)
                         
-                        policy_loss = -(action_log_probs * batch_advantages).mean()
+                        ratio = torch.exp(action_log_probs - batch_old_log_probs)
+                        
+                        surr1 = ratio * batch_advantages
+                        surr2 = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon) * batch_advantages
+                        
+                        policy_loss = -torch.min(surr1, surr2).mean()
                         value_loss = F.mse_loss(values, batch_returns)
                         
                         # Entropy Loss (Regularization)
                         dist = torch.distributions.Categorical(probs)
                         entropy = dist.entropy().mean()
                         
-                        loss = policy_loss + value_loss - self.entropy_coef * entropy
+                        loss = policy_loss + 0.5 * value_loss - self.entropy_coef * entropy
                         
                         self.optimizer.zero_grad()
                         loss.backward()
@@ -256,9 +278,8 @@ class ReinforceTrainer:
                     self.eval_net_vs_net_results[num_games_completed] = net_vs_net_res
                     logging.info(f"Net vs Net Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {net_vs_net_res}")
 
-                    # Eval vs Stockfish
                     logging.info("Running Eval vs Stockfish...")
-                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=128, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=self.eval_elo, stockfish_time_per_move=5)
+                    stockfish_handler = StockfishEvalHandler(num_games=128, batch_size=128, weights_path=checkpoint_path, stockfish_path=self.stockfish_path, stockfish_elo=self.eval_elo, stockfish_depth=self.eval_depth)
                     stockfish_res = stockfish_handler.eval()
                     self.eval_stockfish_results[num_games_completed] = stockfish_res
                     logging.info(f"Stockfish Results (Win Rate, Tie Rate, Loss Rate, AvgMoves): {stockfish_res}")
@@ -279,10 +300,8 @@ class ReinforceTrainer:
                         os.rename(checkpoint_path, new_best_path)
                         self.prev_best_checkpoint_path = new_best_path
                         
-                        # Update opponent to the new best model
-                        # TODO: Maintain a pool of past best models and sample from them to prevent overfitting/cycles
-                        #self.model_handler_opponent.model.load_state_dict(self.model_handler_trainable.model.state_dict())
-                        #logging.info("Updated opponent to new best model")
+                        self.model_handler_opponent.model.load_state_dict(self.model_handler_trainable.model.state_dict())
+                        logging.info("Updated opponent to new best model")
 
                     else:
                         if os.path.exists(checkpoint_path):
@@ -315,7 +334,9 @@ def main():
         epochs=4, # TUNE
         base_num_games=base_num_games,
         base_elo=base_elo,
-        eval_elo=eval_elo
+        eval_elo=eval_elo,
+        eval_depth=6,
+        lr_step_size=100
     )
     trainer.train()
 
